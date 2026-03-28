@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.0  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.1  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.0
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.1
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.0  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.1  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -301,6 +301,20 @@ _do_install_panel() {
         err "Failed to add PHP repo. Cannot continue."
         return 1
     }
+
+    # 3 ── Kill any stale MariaDB/MySQL that would block install
+    step "Pre-install Cleanup"
+    systemctl stop mariadb mysql 2>/dev/null || true
+    pkill -9 mysqld mariadbd 2>/dev/null || true
+    # If a broken/partial mariadb install exists, purge it first
+    if dpkg -l mariadb-server 2>/dev/null | grep -qE '^(iF|iU|rH)'; then
+        info "Removing broken MariaDB install..."
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y mariadb-server mariadb-server-core \
+            mariadb-client mariadb-common mysql-common 2>/dev/null || true
+        rm -rf /etc/mysql /var/lib/mysql /var/run/mysqld
+        apt-get autoremove -y &>/dev/null
+    fi
+    ok "Pre-install cleanup done"
 
     # 3 ── Core packages
     step "Core Dependencies"
@@ -1086,7 +1100,8 @@ uninstall_everything() {
     # ── Internal helper: run apt purge silently, only show real errors ──
     _apt_purge() {
         DEBIAN_FRONTEND=noninteractive apt-get purge -y "$@" 2>&1 \
-            | grep -vE "^(Reading|Building|Note, selecting|Package '.*' is not installed|0 upgraded|The following)" \
+            | grep -vE \
+                "^(Reading|Building|Note, selecting|Package '.*' is not installed|0 upgraded|The following|Use 'apt|E: Unable to locate|E: Couldn't find)" \
             | grep -vE "^\s*$" \
             | head -5 || true
     }
@@ -2540,6 +2555,15 @@ emergency_502_fix() {
 
     # ── Step 4: MariaDB — install if missing ───────────────────
     step "MariaDB"
+    systemctl stop mariadb mysql 2>/dev/null || true
+    pkill -9 mysqld mariadbd 2>/dev/null || true
+    if dpkg -l mariadb-server 2>/dev/null | grep -qE '^(iF|iU|rH)'; then
+        warn "Broken MariaDB found — purging first..."
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y mariadb-server mariadb-server-core \
+            mariadb-client mariadb-common mysql-common &>/dev/null || true
+        rm -rf /etc/mysql /var/lib/mysql /var/run/mysqld
+        apt-get autoremove -y &>/dev/null
+    fi
     if ! dpkg -l mariadb-server 2>/dev/null | grep -q "^ii"; then
         warn "MariaDB not installed — installing..."
         DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server &>/dev/null
@@ -2578,7 +2602,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.0)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.1)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
