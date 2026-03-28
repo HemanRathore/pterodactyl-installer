@@ -3,7 +3,7 @@
 #  ZynrCloud — Pterodactyl Master Command
 #  One-tap installer — run as root:
 #
-#    bash <(curl -fsSL https://raw.githubusercontent.com/zynrcloud/pterodactyl-installer/main/install.sh)
+#    bash <(curl -fsSL https://raw.githubusercontent.com/HemanRathore/pterodactyl-installer/main/install.sh)
 #
 # ============================================================
 
