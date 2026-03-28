@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.1  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.2  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.1
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.2
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.1  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.2  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -305,15 +305,27 @@ _do_install_panel() {
     # 3 ── Kill any stale MariaDB/MySQL that would block install
     step "Pre-install Cleanup"
     systemctl stop mariadb mysql 2>/dev/null || true
-    pkill -9 mysqld mariadbd 2>/dev/null || true
-    # If a broken/partial mariadb install exists, purge it first
-    if dpkg -l mariadb-server 2>/dev/null | grep -qE '^(iF|iU|rH)'; then
+    pkill -9 mysqld mariadbd mysqld_safe 2>/dev/null || true
+    kill -9 $(lsof -t -i:3306 2>/dev/null) 2>/dev/null || true
+    # If a broken/partial mariadb install exists, force-remove it
+    if dpkg -l mariadb-server 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
         info "Removing broken MariaDB install..."
-        DEBIAN_FRONTEND=noninteractive apt-get purge -y mariadb-server mariadb-server-core \
-            mariadb-client mariadb-common mysql-common 2>/dev/null || true
-        rm -rf /etc/mysql /var/lib/mysql /var/run/mysqld
+        DEBIAN_FRONTEND=noninteractive dpkg --remove --force-remove-reinstreq             mariadb-server mariadb-server-core mariadb-client mariadb-client-core             mariadb-common mysql-common 2>/dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y mariadb-server mariadb-server-core             mariadb-client mariadb-common mysql-common 2>/dev/null || true
+        rm -rf /etc/mysql /var/lib/mysql /var/run/mysqld /var/log/mysql
         apt-get autoremove -y &>/dev/null
     fi
+    # If a broken/partial PHP 8.2 install exists, purge and wipe it
+    if dpkg -l php8.2-common 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
+        info "Removing broken PHP 8.2 install..."
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y "php8.2*" 2>/dev/null || true
+        rm -rf /etc/php/8.2 /usr/lib/php/20220829
+    fi
+    # Pre-create PHP dirs so post-install scripts never fail on missing paths
+    mkdir -p /etc/php/8.2/mods-available /etc/php/8.2/cli/conf.d /etc/php/8.2/fpm/conf.d
+    # Fix any other broken dpkg state before installing
+    dpkg --configure -a 2>/dev/null || true
+    apt-get install -f -y &>/dev/null || true
     ok "Pre-install cleanup done"
 
     # 3 ── Core packages
@@ -327,6 +339,18 @@ _do_install_panel() {
         php8.2-fpm php8.2-curl php8.2-zip \
         mariadb-server redis-server
     local PKG_EXIT=$?
+    if [ $PKG_EXIT -ne 0 ]; then
+        # Last resort: fix broken state and retry once
+        warn "First install attempt failed — fixing dpkg state and retrying..."
+        dpkg --configure -a 2>/dev/null || true
+        apt-get install -f -y &>/dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            php8.2 php8.2-cli php8.2-gd php8.2-mysql php8.2-pdo \
+            php8.2-mbstring php8.2-tokenizer php8.2-bcmath php8.2-xml \
+            php8.2-fpm php8.2-curl php8.2-zip \
+            mariadb-server redis-server
+        PKG_EXIT=$?
+    fi
     if [ $PKG_EXIT -ne 0 ]; then
         err "Package installation failed (exit ${PKG_EXIT})"
         err "Check your internet connection and try again"
@@ -2556,14 +2580,24 @@ emergency_502_fix() {
     # ── Step 4: MariaDB — install if missing ───────────────────
     step "MariaDB"
     systemctl stop mariadb mysql 2>/dev/null || true
-    pkill -9 mysqld mariadbd 2>/dev/null || true
-    if dpkg -l mariadb-server 2>/dev/null | grep -qE '^(iF|iU|rH)'; then
-        warn "Broken MariaDB found — purging first..."
-        DEBIAN_FRONTEND=noninteractive apt-get purge -y mariadb-server mariadb-server-core \
-            mariadb-client mariadb-common mysql-common &>/dev/null || true
-        rm -rf /etc/mysql /var/lib/mysql /var/run/mysqld
+    pkill -9 mysqld mariadbd mysqld_safe 2>/dev/null || true
+    kill -9 $(lsof -t -i:3306 2>/dev/null) 2>/dev/null || true
+    if dpkg -l mariadb-server 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
+        warn "Broken MariaDB found — force-removing..."
+        DEBIAN_FRONTEND=noninteractive dpkg --remove --force-remove-reinstreq             mariadb-server mariadb-server-core mariadb-client mariadb-client-core             mariadb-common mysql-common 2>/dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y mariadb-server mariadb-server-core             mariadb-client mariadb-common mysql-common &>/dev/null || true
+        rm -rf /etc/mysql /var/lib/mysql /var/run/mysqld /var/log/mysql
         apt-get autoremove -y &>/dev/null
     fi
+    # Fix broken PHP too if present
+    if dpkg -l php8.2-common 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
+        warn "Broken PHP 8.2 found — purging..."
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y "php8.2*" 2>/dev/null || true
+        rm -rf /etc/php/8.2 /usr/lib/php/20220829
+    fi
+    mkdir -p /etc/php/8.2/mods-available /etc/php/8.2/cli/conf.d /etc/php/8.2/fpm/conf.d
+    dpkg --configure -a 2>/dev/null || true
+    apt-get install -f -y &>/dev/null || true
     if ! dpkg -l mariadb-server 2>/dev/null | grep -q "^ii"; then
         warn "MariaDB not installed — installing..."
         DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server &>/dev/null
@@ -2602,7 +2636,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.1)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.2)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
