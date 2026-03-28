@@ -1514,6 +1514,29 @@ blueprints_menu() {
         rm -rf "$BP_TMP"
         ok "Files copied"
 
+# ── Ensure Node.js + yarn are present before blueprint runs ──
+        step "Node.js + Yarn"
+        if ! command -v node &>/dev/null; then
+            info "Node.js not found — installing Node.js 20..."
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &>/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs &>/dev/null
+        fi
+        ok "Node.js: $(node --version 2>/dev/null)"
+
+        # Fix yarn — remove broken symlink/file then reinstall cleanly
+        if ! yarn --version &>/dev/null 2>&1; then
+            info "yarn broken or missing — fixing..."
+            rm -f /usr/bin/yarn /usr/local/bin/yarn
+            npm install -g yarn --force &>/dev/null
+        fi
+        # If npm install yarn fails due to EEXIST conflict, force overwrite
+        if ! yarn --version &>/dev/null 2>&1; then
+            info "yarn still broken — forcing overwrite..."
+            rm -f /usr/bin/yarn /usr/bin/yarnpkg /usr/local/bin/yarn
+            npm install -g yarn --force &>/dev/null
+        fi
+        ok "yarn: $(yarn --version 2>/dev/null || echo 'installed')"
+
         # Run installer as root (it handles its own permissions internally)
         chmod +x /var/www/pterodactyl/blueprint.sh
         cd /var/www/pterodactyl || return 1
@@ -1522,6 +1545,19 @@ blueprints_menu() {
         bash /var/www/pterodactyl/blueprint.sh
         local EXIT_CODE=$?
 
+        # ── If blueprint failed, attempt yarn self-heal and retry once ──
+        if [ $EXIT_CODE -ne 0 ]; then
+            warn "Blueprint exited with error — attempting yarn self-heal + retry..."
+            rm -f /usr/bin/yarn /usr/local/bin/yarn
+            npm install -g yarn --force &>/dev/null
+            ok "yarn reinstalled: $(yarn --version 2>/dev/null)"
+            info "Retrying blueprint.sh..."
+            bash /var/www/pterodactyl/blueprint.sh
+            EXIT_CODE=$?
+        fi
+
+
+        
         if [ $EXIT_CODE -eq 0 ]; then
             ok "Blueprint Framework ${MODE}ed successfully!"
             # Fix ownership after install
