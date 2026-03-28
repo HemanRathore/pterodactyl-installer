@@ -1001,59 +1001,262 @@ uninstall_wings() {
 
 # ═══════════════════════════════════════════════════════════════
 #  [6]  UNINSTALL EVERYTHING
+#  Removes: Panel, Wings, Docker, MariaDB, Redis, Nginx, PHP,
+#  Composer, Node.js, Yarn, NPM, Certbot, Cloudflared,
+#  Blueprint Framework, all configs, all data, all services
 # ═══════════════════════════════════════════════════════════════
 uninstall_everything() {
-    show_banner; echo -e "${BOLD}${RED}  💣 UNINSTALL EVERYTHING${RESET}"; sep; require_root
-    warn "DESTROYS Panel + Wings + Docker + Cloudflared on this server."
-    warn "All server data will be PERMANENTLY lost."
-    ask "Type DELETE-EVERYTHING to proceed:"; read -r C
+    show_banner
+    echo -e "${BOLD}${RED}  💣 UNINSTALL EVERYTHING — FULL WIPE${RESET}"
+    sep
+    require_root
+
+    echo ""
+    echo -e "  ${RED}${BOLD}This will PERMANENTLY destroy:${RESET}"
+    echo -e "  ${RED}  ✘  Pterodactyl Panel + all panel data${RESET}"
+    echo -e "  ${RED}  ✘  Pterodactyl Wings + all server files${RESET}"
+    echo -e "  ${RED}  ✘  MariaDB + ALL databases${RESET}"
+    echo -e "  ${RED}  ✘  Docker + all containers and images${RESET}"
+    echo -e "  ${RED}  ✘  Redis, Nginx, PHP 8.2, Certbot${RESET}"
+    echo -e "  ${RED}  ✘  Node.js, NPM, Yarn${RESET}"
+    echo -e "  ${RED}  ✘  Composer${RESET}"
+    echo -e "  ${RED}  ✘  Blueprint Framework + all extensions${RESET}"
+    echo -e "  ${RED}  ✘  Cloudflared + tunnel config${RESET}"
+    echo -e "  ${RED}  ✘  All SSL certificates${RESET}"
+    echo -e "  ${RED}  ✘  All cron jobs and systemd services${RESET}"
+    echo ""
+    warn "There is NO undo. The server will be as clean as a fresh install."
+    echo ""
+    ask "Type  DELETE-EVERYTHING  to confirm:"; read -r C
     [[ "$C" != "DELETE-EVERYTHING" ]] && { info "Aborted."; pause; return; }
 
-    step "Stopping All Services"
-    for svc in pteroq wings nginx php8.2-fpm docker cloudflared; do
-        systemctl stop "$svc" 2>/dev/null && info "Stopped: $svc" || true
+    echo ""
+    warn "Starting full wipe in 3 seconds... Ctrl+C to cancel"
+    sleep 3
+
+    # ═══════════════════════════════════════════════════════════
+    step "[ 1/12 ] Stopping All Services"
+    # ═══════════════════════════════════════════════════════════
+    for svc in pteroq wings nginx php8.2-fpm php8.1-fpm php8.0-fpm \
+               mariadb mysql redis-server redis docker cloudflared; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl stop "$svc" 2>/dev/null
+            info "Stopped: $svc"
+        fi
         systemctl disable "$svc" 2>/dev/null || true
     done
     ok "All services stopped"
 
-    step "Removing Panel"
+    # ═══════════════════════════════════════════════════════════
+    step "[ 2/12 ] Removing Pterodactyl Panel"
+    # ═══════════════════════════════════════════════════════════
+    # Panel files
     rm -rf /var/www/pterodactyl
+    ok "Panel files removed"
+
+    # Panel service
     rm -f /etc/systemd/system/pteroq.service
+    ok "pteroq service removed"
+
+    # Panel cron
+    crontab -l 2>/dev/null | grep -v 'pterodactyl' | crontab - 2>/dev/null
+    ok "Cron job removed"
+
+    # Nginx vhost
     rm -f /etc/nginx/sites-enabled/pterodactyl.conf
     rm -f /etc/nginx/sites-available/pterodactyl.conf
-    mysql -u root -e "DROP DATABASE IF EXISTS panel;" 2>/dev/null
-    mysql -u root -e "DROP USER IF EXISTS 'pterodactyl'@'127.0.0.1';" 2>/dev/null
-    mysql -u root -e "FLUSH PRIVILEGES;" 2>/dev/null
-    crontab -l 2>/dev/null | grep -v 'pterodactyl' | crontab - 2>/dev/null
-    ok "Panel removed"
+    ok "Nginx vhost removed"
 
-    step "Removing Wings"
+    # ═══════════════════════════════════════════════════════════
+    step "[ 3/12 ] Removing Pterodactyl Wings"
+    # ═══════════════════════════════════════════════════════════
     rm -f /usr/local/bin/wings
     rm -rf /etc/pterodactyl
     rm -f /etc/systemd/system/wings.service
     ok "Wings removed"
 
-    step "Removing Docker"
-    apt-get purge -y docker-ce docker-ce-cli containerd.io \
-        docker-buildx-plugin docker-compose-plugin 2>/dev/null | tail -3
-    rm -rf /var/lib/docker /etc/docker
-    ok "Docker removed"
+    # ═══════════════════════════════════════════════════════════
+    step "[ 4/12 ] Removing MariaDB / MySQL + ALL Databases"
+    # ═══════════════════════════════════════════════════════════
+    # Drop the panel DB/user first (best effort)
+    mysql -u root -e "DROP DATABASE IF EXISTS panel;" 2>/dev/null || true
+    mysql -u root -e "DROP USER IF EXISTS 'pterodactyl'@'127.0.0.1';" 2>/dev/null || true
+    mysql -u root -e "FLUSH PRIVILEGES;" 2>/dev/null || true
 
-    step "Removing Cloudflared"
+    # Purge MariaDB and MySQL completely
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        mariadb-server mariadb-client mariadb-common \
+        mysql-server mysql-client mysql-common \
+        'mariadb-*' 'mysql-*' 2>/dev/null | tail -3
+
+    # Remove ALL MariaDB/MySQL data directories and configs
+    rm -rf /var/lib/mysql
+    rm -rf /var/lib/mariadb
+    rm -rf /etc/mysql
+    rm -rf /etc/mariadb.conf.d
+    rm -rf /var/log/mysql
+    rm -rf /var/log/mariadb
+    rm -f /root/.my.cnf
+    ok "MariaDB + all databases completely removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[ 5/12 ] Removing Docker + All Containers & Images"
+    # ═══════════════════════════════════════════════════════════
+    # Stop and remove all containers first
+    if command -v docker &>/dev/null; then
+        docker stop $(docker ps -aq) 2>/dev/null || true
+        docker rm   $(docker ps -aq) 2>/dev/null || true
+        docker rmi  $(docker images -q) 2>/dev/null || true
+        docker volume prune -f 2>/dev/null || true
+        docker network prune -f 2>/dev/null || true
+        ok "All Docker containers/images/volumes removed"
+    fi
+
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin \
+        docker-compose docker.io 2>/dev/null | tail -3
+
+    rm -rf /var/lib/docker
+    rm -rf /etc/docker
+    rm -rf /var/run/docker.sock
+    rm -rf /usr/local/lib/docker
+    rm -f /usr/local/bin/docker-compose
+    ok "Docker fully removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[ 6/12 ] Removing Redis"
+    # ═══════════════════════════════════════════════════════════
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        redis redis-server redis-tools 2>/dev/null | tail -2
+    rm -rf /var/lib/redis /etc/redis /var/log/redis
+    ok "Redis removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[ 7/12 ] Removing Nginx + SSL Certificates"
+    # ═══════════════════════════════════════════════════════════
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        nginx nginx-common nginx-core nginx-full \
+        certbot python3-certbot-nginx 2>/dev/null | tail -3
+
+    rm -rf /etc/nginx
+    rm -rf /var/log/nginx
+    rm -rf /var/cache/nginx
+
+    # Remove all Let's Encrypt certificates
+    rm -rf /etc/letsencrypt
+    rm -rf /var/lib/letsencrypt
+    rm -rf /var/log/letsencrypt
+    ok "Nginx + all SSL certificates removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[ 8/12 ] Removing PHP 8.2 + All Extensions"
+    # ═══════════════════════════════════════════════════════════
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        'php8.2*' 'php8.1*' 'php8.0*' 'php7.4*' \
+        'php-*' php-common 2>/dev/null | tail -3
+
+    rm -rf /etc/php
+    rm -rf /var/lib/php
+    rm -rf /run/php
+    rm -f /usr/bin/php /usr/bin/php8.2 /usr/bin/php8.1
+
+    # Remove Sury/Ondrej PHP repo
+    rm -f /etc/apt/sources.list.d/sury-php.list
+    rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php-*.list
+    rm -f /usr/share/keyrings/sury-php.gpg
+    ok "PHP + PHP repo removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[ 9/12 ] Removing Node.js, NPM, Yarn"
+    # ═══════════════════════════════════════════════════════════
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        nodejs npm 2>/dev/null | tail -3
+
+    # Remove Yarn (installed via npm or apt)
+    npm uninstall -g yarn 2>/dev/null || true
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y yarn 2>/dev/null || true
+
+    # Remove NodeSource repo
+    rm -f /etc/apt/sources.list.d/nodesource.list
+    rm -f /usr/share/keyrings/nodesource.gpg
+    rm -f /etc/apt/sources.list.d/yarn.list
+    rm -f /usr/share/keyrings/yarnkey.gpg
+
+    # Remove leftover global node_modules and cache
+    rm -rf /usr/local/lib/node_modules
+    rm -rf /usr/lib/node_modules
+    rm -rf /root/.npm
+    rm -rf /root/.yarn
+    rm -rf /root/.config/yarn
+    rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/yarn
+    ok "Node.js + NPM + Yarn removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[10/12 ] Removing Composer"
+    # ═══════════════════════════════════════════════════════════
+    rm -f /usr/local/bin/composer
+    rm -rf /root/.composer
+    rm -rf /root/.config/composer
+    ok "Composer removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[11/12 ] Removing Blueprint Framework"
+    # ═══════════════════════════════════════════════════════════
+    rm -f /usr/local/bin/blueprint
+    rm -f /usr/bin/blueprint
+    # Blueprint files inside panel are already gone with panel files
+    # But clean up any stray blueprint tmp files
+    rm -rf /tmp/blueprint-framework* 2>/dev/null
+    rm -rf /tmp/bp_* 2>/dev/null
+    rm -rf /tmp/bpinst_* 2>/dev/null
+    ok "Blueprint Framework removed"
+
+    # ═══════════════════════════════════════════════════════════
+    step "[12/12 ] Removing Cloudflared + Final Cleanup"
+    # ═══════════════════════════════════════════════════════════
+    # Cloudflared
     cloudflared service uninstall 2>/dev/null || true
     rm -f /usr/local/bin/cloudflared
     rm -f /etc/systemd/system/cloudflared.service
     rm -rf /root/.cloudflared
     ok "Cloudflared removed"
 
-    step "Cleanup"
+    # Reload systemd after removing all unit files
     systemctl daemon-reload
-    apt-get autoremove -y &>/dev/null
-    ok "Cleanup done"
+    systemctl reset-failed 2>/dev/null || true
 
-    sep
-    ok "Everything uninstalled successfully!"
-    echo -e "${CYAN}  ★ ZynrCloud — https://zynrcloud.com${RESET}"
+    # Run apt autoremove to clean orphaned dependencies
+    info "Cleaning up orphaned packages..."
+    DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null | tail -3
+    DEBIAN_FRONTEND=noninteractive apt-get autoclean -y 2>/dev/null | tail -2
+
+    # Update apt cache to reflect removed repos
+    DEBIAN_FRONTEND=noninteractive apt-get update -y &>/dev/null
+
+    ok "System cleanup complete"
+
+    # ── Final summary ───────────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${GREEN}  ╔══════════════════════════════════════════════════════════╗${RESET}"
+    echo -e "${BOLD}${GREEN}  ║        ✔  FULL WIPE COMPLETE — Server is clean          ║${RESET}"
+    echo -e "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════════╣${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Pterodactyl Panel      removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Pterodactyl Wings      removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  MariaDB + databases    removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Docker + containers    removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Redis                  removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Nginx + SSL certs      removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  PHP 8.2 + extensions   removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Node.js + Yarn + NPM   removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Composer               removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Blueprint Framework     removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  Cloudflared            removed                      ║${RESET}"
+    echo -e "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════════╣${RESET}"
+    echo -e "${BOLD}${CYAN}  ║  Server is clean. Run option [1] for a fresh install.   ║${RESET}"
+    echo -e "${BOLD}${CYAN}  ║  ★  ZynrCloud — https://zynrcloud.com                   ║${RESET}"
+    echo -e "${BOLD}${GREEN}  ╚══════════════════════════════════════════════════════════╝${RESET}"
+    echo ""
     pause
 }
 
@@ -1514,29 +1717,6 @@ blueprints_menu() {
         rm -rf "$BP_TMP"
         ok "Files copied"
 
-# ── Ensure Node.js + yarn are present before blueprint runs ──
-        step "Node.js + Yarn"
-        if ! command -v node &>/dev/null; then
-            info "Node.js not found — installing Node.js 20..."
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &>/dev/null
-            DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs &>/dev/null
-        fi
-        ok "Node.js: $(node --version 2>/dev/null)"
-
-        # Fix yarn — remove broken symlink/file then reinstall cleanly
-        if ! yarn --version &>/dev/null 2>&1; then
-            info "yarn broken or missing — fixing..."
-            rm -f /usr/bin/yarn /usr/local/bin/yarn
-            npm install -g yarn --force &>/dev/null
-        fi
-        # If npm install yarn fails due to EEXIST conflict, force overwrite
-        if ! yarn --version &>/dev/null 2>&1; then
-            info "yarn still broken — forcing overwrite..."
-            rm -f /usr/bin/yarn /usr/bin/yarnpkg /usr/local/bin/yarn
-            npm install -g yarn --force &>/dev/null
-        fi
-        ok "yarn: $(yarn --version 2>/dev/null || echo 'installed')"
-
         # Run installer as root (it handles its own permissions internally)
         chmod +x /var/www/pterodactyl/blueprint.sh
         cd /var/www/pterodactyl || return 1
@@ -1545,19 +1725,6 @@ blueprints_menu() {
         bash /var/www/pterodactyl/blueprint.sh
         local EXIT_CODE=$?
 
-        # ── If blueprint failed, attempt yarn self-heal and retry once ──
-        if [ $EXIT_CODE -ne 0 ]; then
-            warn "Blueprint exited with error — attempting yarn self-heal + retry..."
-            rm -f /usr/bin/yarn /usr/local/bin/yarn
-            npm install -g yarn --force &>/dev/null
-            ok "yarn reinstalled: $(yarn --version 2>/dev/null)"
-            info "Retrying blueprint.sh..."
-            bash /var/www/pterodactyl/blueprint.sh
-            EXIT_CODE=$?
-        fi
-
-
-        
         if [ $EXIT_CODE -eq 0 ]; then
             ok "Blueprint Framework ${MODE}ed successfully!"
             # Fix ownership after install
@@ -2599,7 +2766,7 @@ themes_blueprints_menu() {
     ask "Choose:"; read -r TBM_OPT
 
     # ── GitHub config (update these with your repo) ───────────
-    local GH_USER="HemanRathore"
+    local GH_USER="zynrcloud"
     local GH_REPO="pterodactyl-installer"
     local GH_RAW="https://raw.githubusercontent.com/${GH_USER}/${GH_REPO}/main"
     local GH_REL="https://github.com/${GH_USER}/${GH_REPO}/releases/latest/download"
