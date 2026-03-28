@@ -1083,11 +1083,18 @@ uninstall_everything() {
     mysql -u root -e "DROP USER IF EXISTS 'pterodactyl'@'127.0.0.1';" 2>/dev/null || true
     mysql -u root -e "FLUSH PRIVILEGES;" 2>/dev/null || true
 
+    # ── Internal helper: run apt purge silently, only show real errors ──
+    _apt_purge() {
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y "$@" 2>&1 \
+            | grep -vE "^(Reading|Building|Note, selecting|Package '.*' is not installed|0 upgraded|The following)" \
+            | grep -vE "^\s*$" \
+            | head -5 || true
+    }
+
     # Purge MariaDB and MySQL completely
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        mariadb-server mariadb-client mariadb-common \
-        mysql-server mysql-client mysql-common \
-        'mariadb-*' 'mysql-*' 2>/dev/null | tail -3
+    _apt_purge mariadb-server mariadb-client mariadb-common \
+               mysql-server mysql-client mysql-common \
+               'mariadb-*' 'mysql-*'
 
     # Force-remove ALL MariaDB/MySQL data, configs, logs
     # (dpkg warns if not empty but won't delete — we do it manually)
@@ -1106,20 +1113,24 @@ uninstall_everything() {
     # ═══════════════════════════════════════════════════════════
     step "[ 5/12 ] Removing Docker + All Containers & Images"
     # ═══════════════════════════════════════════════════════════
-    # Stop and remove all containers first
     if command -v docker &>/dev/null; then
-        docker stop $(docker ps -aq) 2>/dev/null || true
-        docker rm   $(docker ps -aq) 2>/dev/null || true
-        docker rmi  $(docker images -q) 2>/dev/null || true
-        docker volume prune -f 2>/dev/null || true
-        docker network prune -f 2>/dev/null || true
-        ok "All Docker containers/images/volumes removed"
+        # Restart docker briefly to allow clean container removal
+        systemctl start docker &>/dev/null; sleep 2
+        if systemctl is-active --quiet docker 2>/dev/null; then
+            local CTRS; CTRS=$(docker ps -aq 2>/dev/null)
+            [ -n "$CTRS" ] && { docker stop $CTRS &>/dev/null; docker rm $CTRS &>/dev/null; } || true
+            local IMGS; IMGS=$(docker images -q 2>/dev/null)
+            [ -n "$IMGS" ] && docker rmi -f $IMGS &>/dev/null || true
+            docker volume  prune -f &>/dev/null || true
+            docker network prune -f &>/dev/null || true
+            systemctl stop docker &>/dev/null
+        fi
+        ok "Docker containers/images/volumes cleaned"
     fi
 
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        docker-ce docker-ce-cli containerd.io \
+    _apt_purge docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin \
-        docker-compose docker.io 2>/dev/null | tail -3
+        docker-compose docker.io
 
     rm -rf /var/lib/docker
     rm -rf /etc/docker
@@ -1131,17 +1142,15 @@ uninstall_everything() {
     # ═══════════════════════════════════════════════════════════
     step "[ 6/12 ] Removing Redis"
     # ═══════════════════════════════════════════════════════════
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        redis redis-server redis-tools 2>/dev/null | tail -2
+    _apt_purge redis redis-server redis-tools
     rm -rf /var/lib/redis /etc/redis /var/log/redis
     ok "Redis removed"
 
     # ═══════════════════════════════════════════════════════════
     step "[ 7/12 ] Removing Nginx + SSL Certificates"
     # ═══════════════════════════════════════════════════════════
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        nginx nginx-common nginx-core nginx-full \
-        certbot python3-certbot-nginx 2>/dev/null | tail -3
+    _apt_purge nginx nginx-common nginx-core nginx-full \
+        certbot python3-certbot-nginx
 
     rm -rf /etc/nginx
     rm -rf /var/log/nginx
@@ -1156,9 +1165,7 @@ uninstall_everything() {
     # ═══════════════════════════════════════════════════════════
     step "[ 8/12 ] Removing PHP 8.2 + All Extensions"
     # ═══════════════════════════════════════════════════════════
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        'php8.2*' 'php8.1*' 'php8.0*' 'php7.4*' \
-        'php-*' php-common 2>/dev/null | tail -3
+    _apt_purge 'php8.2*' 'php8.1*' 'php8.0*' 'php7.4*' 'php-*' php-common
 
     rm -rf /etc/php
     rm -rf /var/lib/php
@@ -1183,8 +1190,8 @@ uninstall_everything() {
     rm -f /usr/bin/yarn /usr/bin/yarnpkg
     rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
-    # Now purge Node.js and npm
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y nodejs npm 2>/dev/null | tail -3
+    # Now purge Node.js and npm (never purge 'yarn' via apt — it installs cmdtest!)
+    _apt_purge nodejs npm
 
     # Remove NodeSource / Yarn apt repos
     rm -f /etc/apt/sources.list.d/nodesource.list
