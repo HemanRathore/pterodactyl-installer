@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.2  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.3  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.2
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.3
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.2  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.3  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -368,9 +368,7 @@ _do_install_panel() {
 
     # 4 ── Start Redis NOW (artisan commands need it)
     step "Redis"
-    systemctl enable redis-server &>/dev/null
-    systemctl start  redis-server &>/dev/null
-    sleep 3
+    _fix_redis
     if systemctl is-active --quiet redis-server; then
         ok "Redis running"
     else
@@ -2562,9 +2560,7 @@ emergency_502_fix() {
         DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server &>/dev/null
         ok "Redis installed"
     fi
-    systemctl enable redis-server &>/dev/null
-    systemctl start  redis-server &>/dev/null
-    sleep 2
+    _fix_redis
     if systemctl is-active --quiet redis-server; then
         ok "Redis running"
     else
@@ -2636,7 +2632,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.2)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.3)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -3108,6 +3104,19 @@ themes_blueprints_menu() {
     esac
 
     sep; echo -e "${CYAN}  ★ ZynrCloud — https://zynrcloud.com${RESET}"; pause
+}
+
+# ── Redis auto-fix helper ────────────────────────────────────
+_fix_redis() {
+    if [ ! -f /etc/redis/redis.conf ]; then
+        warn "Redis config missing — reinstalling redis-server..."
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y redis-server redis-tools &>/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server &>/dev/null
+        ok "Redis reinstalled"
+    fi
+    systemctl enable redis-server &>/dev/null
+    systemctl start  redis-server &>/dev/null
+    sleep 2
 }
 
 pause() {
