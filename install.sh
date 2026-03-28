@@ -30,7 +30,7 @@ echo ""
 # ── Root check ───────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
     echo -e "${RED}  [✘] This installer must be run as root.${RESET}"
-    echo -e "${YELLOW}  [!] Run: sudo bash <(curl -fsSL https://raw.githubusercontent.com/zynrcloud/pterodactyl-installer/main/install.sh)${RESET}"
+    echo -e "${YELLOW}  [!] Run: sudo bash <(curl -fsSL https://raw.githubusercontent.com/HemanRathore/pterodactyl-installer/main/install.sh)${RESET}"
     exit 1
 fi
 
