@@ -1089,14 +1089,18 @@ uninstall_everything() {
         mysql-server mysql-client mysql-common \
         'mariadb-*' 'mysql-*' 2>/dev/null | tail -3
 
-    # Remove ALL MariaDB/MySQL data directories and configs
+    # Force-remove ALL MariaDB/MySQL data, configs, logs
+    # (dpkg warns if not empty but won't delete — we do it manually)
     rm -rf /var/lib/mysql
     rm -rf /var/lib/mariadb
-    rm -rf /etc/mysql
+    rm -rf /etc/mysql          # force delete even if dpkg left it
     rm -rf /etc/mariadb.conf.d
     rm -rf /var/log/mysql
     rm -rf /var/log/mariadb
-    rm -f /root/.my.cnf
+    rm -f  /root/.my.cnf
+    # Clean up any socket files dpkg leaves behind
+    rm -f /var/run/mysqld/mysqld.sock 2>/dev/null
+    rm -rf /var/run/mysqld 2>/dev/null
     ok "MariaDB + all databases completely removed"
 
     # ═══════════════════════════════════════════════════════════
@@ -1170,26 +1174,34 @@ uninstall_everything() {
     # ═══════════════════════════════════════════════════════════
     step "[ 9/12 ] Removing Node.js, NPM, Yarn"
     # ═══════════════════════════════════════════════════════════
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        nodejs npm 2>/dev/null | tail -3
+    # Remove Yarn via npm FIRST (before nuking node)
+    if command -v npm &>/dev/null; then
+        npm uninstall -g yarn corepack 2>/dev/null || true
+    fi
+    # Remove yarn binary directly — do NOT use apt purge yarn
+    # (apt's 'yarn' package is actually 'cmdtest' on Ubuntu — wrong package!)
+    rm -f /usr/bin/yarn /usr/bin/yarnpkg
+    rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
-    # Remove Yarn (installed via npm or apt)
-    npm uninstall -g yarn 2>/dev/null || true
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y yarn 2>/dev/null || true
+    # Now purge Node.js and npm
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y nodejs npm 2>/dev/null | tail -3
 
-    # Remove NodeSource repo
+    # Remove NodeSource / Yarn apt repos
     rm -f /etc/apt/sources.list.d/nodesource.list
+    rm -f /etc/apt/sources.list.d/node_*.list
     rm -f /usr/share/keyrings/nodesource.gpg
     rm -f /etc/apt/sources.list.d/yarn.list
     rm -f /usr/share/keyrings/yarnkey.gpg
 
-    # Remove leftover global node_modules and cache
-    rm -rf /usr/local/lib/node_modules
+    # Force-remove leftover node_modules directories (dpkg won't do this)
     rm -rf /usr/lib/node_modules
+    rm -rf /usr/local/lib/node_modules
+    rm -rf /usr/local/share/.cache/yarn
     rm -rf /root/.npm
     rm -rf /root/.yarn
     rm -rf /root/.config/yarn
-    rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/yarn
+    rm -rf /root/.cache/yarn
+    rm -f  /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
     ok "Node.js + NPM + Yarn removed"
 
     # ═══════════════════════════════════════════════════════════
