@@ -14,11 +14,11 @@
 **The most complete Pterodactyl installer & management tool. One command. Everything included.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v4.4.0-blue.svg)](https://github.com/zynrcloud/pterodactyl-installer/releases)
+[![Version](https://img.shields.io/badge/version-v4.4.0-blue.svg)](https://github.com/HemanRathore/pterodactyl-installer/releases)
 [![Pterodactyl](https://img.shields.io/badge/Pterodactyl-Panel%20%2B%20Wings-green.svg)](https://pterodactyl.io)
 [![Discord](https://img.shields.io/discord/YOUR_DISCORD_ID?label=Discord&logo=discord)](https://discord.gg/zynrcloud)
 
-🌐 **[zynrcloud.com](https://zynrcloud.com)** • 💬 **[discord.gg/zynrcloud](https://discord.gg/zynrcloud)**
+🌐 **[zynr.cloud](https://zynr.cloud)** • 💬 **[discord.gg/zynrcloud](https://discord.gg/zynrcloud)**
 
 </div>
 
@@ -27,7 +27,7 @@
 ## ⚡ One-Tap Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/zynrcloud/pterodactyl-installer/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/HemanRathore/pterodactyl-installer/main/install.sh)
 ```
 
 > Run as **root** on a fresh Ubuntu 22.04 / Debian 12 server. That's it.
