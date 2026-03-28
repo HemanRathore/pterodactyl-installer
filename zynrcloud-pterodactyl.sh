@@ -2563,7 +2563,7 @@ themes_blueprints_menu() {
     ask "Choose:"; read -r TBM_OPT
 
     # ── GitHub config (update these with your repo) ───────────
-    local GH_USER="zynrcloud"
+    local GH_USER="HemanRathore"
     local GH_REPO="pterodactyl-installer"
     local GH_RAW="https://raw.githubusercontent.com/${GH_USER}/${GH_REPO}/main"
     local GH_REL="https://github.com/${GH_USER}/${GH_REPO}/releases/latest/download"
