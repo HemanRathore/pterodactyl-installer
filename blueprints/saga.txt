@@ -1,0 +1,7 @@
+blueprint -i sagaautosuspension
+blueprint -i sagaminecraftplayermanager
+blueprint -i sagaminecraftmodpackinstaller
+blueprint -i sagaautosuspension
+blueprint -i sagaserversorter
+blueprint -i sagaserverpropertiesui
+blueprint -i sagarustplugininstaller
