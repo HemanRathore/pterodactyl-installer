@@ -48,7 +48,7 @@ DEBIAN_FRONTEND=noninteractive apt-get update -y &>/dev/null
 DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget bash &>/dev/null
 
 # ── Download master script ───────────────────────────────────
-SCRIPT_URL="https://raw.githubusercontent.com/zynrcloud/pterodactyl-installer/main/zynrcloud-pterodactyl.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/HemanRathore/pterodactyl-installer/main/zynrcloud-pterodactyl.sh"
 SCRIPT_PATH="/root/zynrcloud-pterodactyl.sh"
 
 echo -e "${CYAN}  [•] Downloading ZynrCloud Master Command...${RESET}"
