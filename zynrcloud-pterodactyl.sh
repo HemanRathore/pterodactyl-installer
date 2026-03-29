@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.12  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.13  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.12
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.13
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.12  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.13  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -1919,7 +1919,7 @@ blueprints_menu() {
             cd /var/www/pterodactyl 2>/dev/null || { err "Panel not found"; pause; return; }
             if command -v blueprint &>/dev/null; then
                 echo ""
-                blueprint list 2>/dev/null || warn "No extensions installed"
+                blueprint -list 2>/dev/null || warn "No extensions installed"
             elif [ -d /var/www/pterodactyl/.blueprint/extensions ]; then
                 info "Extensions found in .blueprint/extensions/:"
                 ls -1 /var/www/pterodactyl/.blueprint/extensions/ 2>/dev/null \
@@ -1939,15 +1939,22 @@ blueprints_menu() {
             cd /var/www/pterodactyl || exit
             echo ""
             info "Currently installed extensions:"
-            blueprint list 2>/dev/null || warn "None found"
+            blueprint -list 2>/dev/null || warn "None found or blueprint -list unsupported"
             echo ""
-            ask "Extension ID to remove (exact ID):"; read -r BID
+            ask "Extension ID to remove (e.g. nightadmin):"; read -r BID
             [ -z "$BID" ] && { warn "No ID entered."; pause; return; }
-            warn "Removing '${BID}' — this rebuilds panel assets (~1 min)"
+            warn "Removing '${BID}' — panel assets will rebuild (~1 min)"
             ask "Confirm? [y/n]:"; read -r RMCONFIRM
             [[ "$RMCONFIRM" =~ ^[Yy]$ ]] || { info "Aborted."; pause; return; }
-            blueprint remove "$BID"
-            [ $? -eq 0 ] && ok "'${BID}' removed successfully!" || err "Remove failed"
+            blueprint -remove "$BID"
+            local RC=$?
+            if [ $RC -eq 0 ]; then
+                ok "'${BID}' removed successfully!"
+                chown -R www-data:www-data /var/www/pterodactyl &>/dev/null
+            else
+                err "Remove failed (exit $RC)"
+                warn "Check the ID is correct — run: blueprint -list"
+            fi
             ;;
 
         # ── [5] Update framework ──────────────────────────
@@ -2687,7 +2694,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.12)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.13)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
