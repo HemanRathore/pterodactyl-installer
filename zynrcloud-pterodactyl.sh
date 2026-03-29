@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.10  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.11  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.10
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.11
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.10  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.11  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -2687,7 +2687,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.10)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.11)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -2894,7 +2894,7 @@ themes_blueprints_menu() {
     ask "Choose:"; read -r TBM_OPT
 
     # ── GitHub config (update these with your repo) ───────────
-    local GH_USER="zynrcloud"
+    local GH_USER="HemanRathore"
     local GH_REPO="pterodactyl-installer"
     local GH_RAW="https://raw.githubusercontent.com/${GH_USER}/${GH_REPO}/main"
     local GH_REL="https://github.com/${GH_USER}/${GH_REPO}/releases/latest/download"
@@ -2921,17 +2921,23 @@ themes_blueprints_menu() {
     _download_bp_from_gh() {
         local BPFILE="$1"
         local DEST="/tmp/${BPFILE}"
-        info "Downloading ${BPFILE} from GitHub releases..." >&2
-        if command -v curl &>/dev/null; then
-            curl -fsSL --retry 3 -o "$DEST" "${GH_REL}/blueprints/${BPFILE}" 2>/dev/null
-        else
-            wget -q --tries=3 -O "$DEST" "${GH_REL}/blueprints/${BPFILE}" 2>/dev/null
-        fi
-        if [ -s "$DEST" ]; then
-            echo "$DEST"; return 0
-        else
-            rm -f "$DEST"; return 1
-        fi
+        info "Downloading ${BPFILE} from GitHub..." >&2
+        # Try raw repo first (blueprints/ folder), then releases
+        local URLS=(
+            "${GH_RAW}/blueprints/${BPFILE}"
+            "${GH_REL}/blueprints/${BPFILE}"
+            "${GH_REL}/${BPFILE}"
+        )
+        for URL in "${URLS[@]}"; do
+            if command -v curl &>/dev/null; then
+                curl -fsSL --retry 2 -o "$DEST" "$URL" 2>/dev/null
+            else
+                wget -q --tries=2 -O "$DEST" "$URL" 2>/dev/null
+            fi
+            [ -s "$DEST" ] && { echo "$DEST"; return 0; }
+            rm -f "$DEST"
+        done
+        return 1
     }
 
     # ── Helper: ensure unrar is installed ────────────────────
