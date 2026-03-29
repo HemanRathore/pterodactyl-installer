@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.9  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.10  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.9
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.10
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.9  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.10  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -1901,13 +1901,13 @@ blueprints_menu() {
                     err "Download failed — check the URL"; pause; return
                 fi
                 ok "Downloaded: ${BP_FN}"
-                blueprint install "$BP_FN"
+                blueprint -install "$BP_FN"
                 local RC=$?
             else
                 [ ! -f "$BP_IN" ] && { err "File not found: $BP_IN"; pause; return; }
                 local BP_FN; BP_FN=$(basename "$BP_IN")
                 cp "$BP_IN" "/var/www/pterodactyl/${BP_FN}"
-                blueprint install "$BP_FN"
+                blueprint -install "$BP_FN"
                 local RC=$?
             fi
             [ $RC -eq 0 ] && ok "Extension installed!" || err "Install failed — check output above"
@@ -2687,7 +2687,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.9)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.10)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -2921,7 +2921,7 @@ themes_blueprints_menu() {
     _download_bp_from_gh() {
         local BPFILE="$1"
         local DEST="/tmp/${BPFILE}"
-        info "Downloading ${BPFILE} from GitHub releases..."
+        info "Downloading ${BPFILE} from GitHub releases..." >&2
         if command -v curl &>/dev/null; then
             curl -fsSL --retry 3 -o "$DEST" "${GH_REL}/blueprints/${BPFILE}" 2>/dev/null
         else
@@ -2956,7 +2956,7 @@ themes_blueprints_menu() {
         cp "${TMPDIR}/${BPFILE}" /var/www/pterodactyl/
         rm -rf "$TMPDIR"
         cd /var/www/pterodactyl || return 1
-        blueprint install "$BPFILE"
+        blueprint -install "$BPFILE"
         local RC=$?
         rm -f "/var/www/pterodactyl/${BPFILE}" 2>/dev/null
         return $RC
@@ -3004,7 +3004,7 @@ themes_blueprints_menu() {
             cd /var/www/pterodactyl || { err "Panel not found"; pause; return; }
 
             info "Installing Nebula theme (takes ~2 min — panel rebuilds assets)..."
-            blueprint install nebula.blueprint
+            blueprint -install nebula.blueprint
             local RC=$?
             rm -f /var/www/pterodactyl/nebula.blueprint 2>/dev/null
 
