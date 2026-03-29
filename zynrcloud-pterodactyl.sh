@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.3  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.4  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.3
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.4
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.3  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.4  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -1773,6 +1773,19 @@ blueprints_menu() {
         rm -rf "$BP_TMP"
         ok "Files copied"
 
+        # Ensure Node.js + Yarn are installed (Blueprint requires both)
+        if ! command -v node &>/dev/null || ! node --version 2>/dev/null | grep -qE "^v(18|20|22|23)"; then
+            info "Installing Node.js 20..."
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &>/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs &>/dev/null
+        fi
+        if ! command -v yarn &>/dev/null; then
+            info "Installing Yarn..."
+            # Must use npm to install yarn — NOT apt (apt's yarn = cmdtest, wrong package)
+            npm install -g yarn &>/dev/null
+        fi
+        ok "Node $(node --version 2>/dev/null) / Yarn $(yarn --version 2>/dev/null) ready"
+
         # Run installer as root (it handles its own permissions internally)
         chmod +x /var/www/pterodactyl/blueprint.sh
         cd /var/www/pterodactyl || return 1
@@ -2632,7 +2645,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.3)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.4)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
