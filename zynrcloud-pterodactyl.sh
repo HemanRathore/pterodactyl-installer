@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.7  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.8  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.7
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.8
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.7  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.8  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -1784,6 +1784,8 @@ blueprints_menu() {
             rm -f /usr/bin/node /usr/bin/nodejs /usr/bin/npm /usr/bin/npx
             rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
             hash -r 2>/dev/null || true
+            # Remove any broken third-party repos that block apt update
+            rm -f /etc/apt/sources.list.d/*ookla* /etc/apt/sources.list.d/*speedtest*                   /etc/apt/trusted.gpg.d/*ookla* /usr/share/keyrings/*ookla* 2>/dev/null || true
             # Add NodeSource repo and install
             curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
             DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
@@ -2685,7 +2687,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.7)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.8)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
