@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.11  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.12  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.11
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.12
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.11  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.12  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -2687,7 +2687,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.11)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.12)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -2922,7 +2922,6 @@ themes_blueprints_menu() {
         local BPFILE="$1"
         local DEST="/tmp/${BPFILE}"
         info "Downloading ${BPFILE} from GitHub..." >&2
-        # Try raw repo first (blueprints/ folder), then releases
         local URLS=(
             "${GH_RAW}/blueprints/${BPFILE}"
             "${GH_REL}/blueprints/${BPFILE}"
@@ -2937,6 +2936,29 @@ themes_blueprints_menu() {
             [ -s "$DEST" ] && { echo "$DEST"; return 0; }
             rm -f "$DEST"
         done
+        return 1
+    }
+
+    # Download Blueprint.rar from GitHub if not found locally
+    _ensure_bp_pack() {
+        local RAR; RAR=$(_find_bp_pack)
+        [ -n "$RAR" ] && { echo "$RAR"; return 0; }
+        info "Blueprint.rar not found locally — downloading from GitHub..." >&2
+        local DEST="/root/Blueprint.rar"
+        local URLS=(
+            "${GH_RAW}/blueprints/Blueprint.rar"
+            "${GH_REL}/Blueprint.rar"
+        )
+        for URL in "${URLS[@]}"; do
+            if command -v curl &>/dev/null; then
+                curl -fsSL --retry 2 -o "$DEST" "$URL" 2>/dev/null
+            else
+                wget -q --tries=2 -O "$DEST" "$URL" 2>/dev/null
+            fi
+            [ -s "$DEST" ] && { ok "Downloaded Blueprint.rar" >&2; echo "$DEST"; return 0; }
+            rm -f "$DEST"
+        done
+        err "Could not download Blueprint.rar from GitHub" >&2
         return 1
     }
 
@@ -3033,13 +3055,11 @@ themes_blueprints_menu() {
             step "Install Full Blueprint Pack (38 extensions)"
             _ensure_unrar || { err "unrar required but could not install"; pause; return; }
 
-            local RAR; RAR=$(_find_bp_pack)
+            local RAR; RAR=$(_ensure_bp_pack)
             if [ -z "$RAR" ]; then
-                warn "Blueprint.rar not found locally — will download each blueprint from GitHub"
-                warn "This requires your GitHub repo to have blueprints uploaded as release assets"
-                echo ""
+                warn "Blueprint.rar unavailable — downloading blueprints individually from GitHub"
             else
-                ok "Found local pack: ${RAR}"
+                ok "Using pack: ${RAR}"
             fi
 
             warn "Installing all 38 blueprints — panel rebuilds assets each time"
@@ -3064,7 +3084,7 @@ themes_blueprints_menu() {
                     if [ -n "$DLPATH" ]; then
                         cp "$DLPATH" /var/www/pterodactyl/
                         cd /var/www/pterodactyl || continue
-                        blueprint install "$BPF"
+                        blueprint -install "$BPF"
                         INSTALL_RC=$?
                         rm -f "/var/www/pterodactyl/${BPF}" "$DLPATH" 2>/dev/null
                     else
@@ -3092,9 +3112,11 @@ themes_blueprints_menu() {
         # ── [3] Pick specific ─────────────────────────────────
         3)
             step "Pick Blueprints to Install"
-            _ensure_unrar || { err "unrar required"; pause; return; }
-            local RAR; RAR=$(_find_bp_pack)
-            [ -z "$RAR" ] && { err "Blueprint.rar not found. Upload to /root/ first."; pause; return; }
+            local RAR; RAR=$(_ensure_bp_pack)
+            if [ -n "$RAR" ]; then
+                _ensure_unrar || RAR=""
+            fi
+            [ -z "$RAR" ] && warn "No Blueprint.rar — will download each blueprint individually from GitHub"
 
             echo ""
             echo -e "  ${WHITE}Available blueprints:${RESET}"
@@ -3116,8 +3138,21 @@ themes_blueprints_menu() {
                     local BPF; BPF=$(echo "$ENTRY" | cut -d'|' -f1)
                     local BPD; BPD=$(echo "$ENTRY" | cut -d'|' -f2)
                     echo ""; info "Installing: ${BPD}"
-                    _install_one_from_rar "$RAR" "$BPF"
-                    [ $? -eq 0 ] && ok "Done: ${BPF}" || err "Failed: ${BPF}"
+                    local INSTALL_RC=1
+                    if [ -n "$RAR" ]; then
+                        _install_one_from_rar "$RAR" "$BPF"
+                        INSTALL_RC=$?
+                    else
+                        local DLPATH; DLPATH=$(_download_bp_from_gh "$BPF")
+                        if [ -n "$DLPATH" ]; then
+                            cp "$DLPATH" /var/www/pterodactyl/
+                            cd /var/www/pterodactyl || continue
+                            blueprint -install "$BPF"
+                            INSTALL_RC=$?
+                            rm -f "/var/www/pterodactyl/${BPF}" "$DLPATH" 2>/dev/null
+                        fi
+                    fi
+                    [ $INSTALL_RC -eq 0 ] && ok "Done: ${BPF}" || err "Failed: ${BPF}"
                 else
                     warn "Invalid: ${NUM} — skipped"
                 fi
