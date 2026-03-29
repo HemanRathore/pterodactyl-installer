@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.8  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.9  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.8
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.9
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.8  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.9  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -1972,7 +1972,7 @@ blueprints_menu() {
             info "Removing Blueprint Framework files..."
             rm -rf /var/www/pterodactyl/.blueprint
             rm -f  /var/www/pterodactyl/blueprint.sh
-            rm -f  /var/www/pterodactyl/blueprint
+            rm -rf /var/www/pterodactyl/blueprint
             rm -f  /usr/local/bin/blueprint
             # Remove Blueprint-added routes/config if present
             rm -f  /var/www/pterodactyl/routes/blueprint.php 2>/dev/null
@@ -1996,7 +1996,7 @@ blueprints_menu() {
             info "Removing Blueprint files..."
             rm -rf /var/www/pterodactyl/.blueprint
             rm -f  /var/www/pterodactyl/blueprint.sh
-            rm -f  /var/www/pterodactyl/blueprint
+            rm -rf /var/www/pterodactyl/blueprint
             rm -f  /usr/local/bin/blueprint
             rm -f  /var/www/pterodactyl/routes/blueprint.php 2>/dev/null
 
@@ -2687,7 +2687,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.8)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.9)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
