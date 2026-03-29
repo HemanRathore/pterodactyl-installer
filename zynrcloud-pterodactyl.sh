@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.6  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.7  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.6
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.7
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.6  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.7  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -1778,18 +1778,26 @@ blueprints_menu() {
         NODE_MAJOR=$(node --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
         if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
             info "Installing Node.js 20 (current: ${NODE_MAJOR:-none})..."
-            # Remove old node first
-            DEBIAN_FRONTEND=noninteractive apt-get purge -y nodejs npm 2>/dev/null || true
-            rm -f /usr/bin/node /usr/bin/nodejs /usr/bin/npm
-            # Install via NodeSource
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &>/dev/null
-            DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs &>/dev/null
+            # Purge ALL old node packages and binaries
+            DEBIAN_FRONTEND=noninteractive apt-get purge -y nodejs npm libnode-dev 'libnode*' 2>/dev/null || true
+            apt-get autoremove -y &>/dev/null || true
+            rm -f /usr/bin/node /usr/bin/nodejs /usr/bin/npm /usr/bin/npx
+            rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
+            hash -r 2>/dev/null || true
+            # Add NodeSource repo and install
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+            # Flush shell command cache so new binary is found
+            hash -r 2>/dev/null || true
             # Verify
-            NODE_MAJOR=$(node --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+            NODE_MAJOR=$(/usr/bin/node --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
             if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
-                err "Node.js 20 install failed (got: $(node --version 2>/dev/null || echo none))"
+                err "Node.js 20 install failed (got: $(/usr/bin/node --version 2>/dev/null || echo none))"
                 return 1
             fi
+            # Point node/npm to new binaries explicitly
+            ln -sf /usr/bin/node /usr/local/bin/node 2>/dev/null || true
+            ln -sf /usr/bin/npm  /usr/local/bin/npm  2>/dev/null || true
         fi
         if ! command -v yarn &>/dev/null; then
             info "Installing Yarn..."
@@ -2677,7 +2685,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.6)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.7)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
