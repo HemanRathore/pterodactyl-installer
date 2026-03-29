@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.4  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.5  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.4
+#         Script   :  zynrcloud-pterodactyl.sh  v4.4.5
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -188,7 +188,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.4  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.5  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -1781,8 +1781,28 @@ blueprints_menu() {
         fi
         if ! command -v yarn &>/dev/null; then
             info "Installing Yarn..."
-            # Must use npm to install yarn — NOT apt (apt's yarn = cmdtest, wrong package)
+            # Must use npm — NOT apt (apt's yarn = cmdtest, wrong package)
             npm install -g yarn &>/dev/null
+            # Ensure yarn is accessible system-wide regardless of PATH
+            YARN_BIN=$(npm root -g 2>/dev/null | sed 's|/node_modules||')/bin/yarn
+            if [ -f "$YARN_BIN" ] && [ ! -f /usr/bin/yarn ]; then
+                ln -sf "$YARN_BIN" /usr/bin/yarn
+            fi
+            # Also try corepack as fallback
+            if ! command -v yarn &>/dev/null && command -v corepack &>/dev/null; then
+                corepack enable &>/dev/null
+                corepack prepare yarn@stable --activate &>/dev/null
+            fi
+            # Hard symlink from known npm global bin locations
+            for p in /usr/local/bin/yarn /usr/lib/node_modules/.bin/yarn /root/.npm-global/bin/yarn; do
+                [ -f "$p" ] && ln -sf "$p" /usr/bin/yarn && break
+            done
+        fi
+        # Final verify — abort early with clear message if still missing
+        if ! command -v yarn &>/dev/null; then
+            err "Yarn install failed — cannot continue Blueprint install"
+            err "Run manually: npm install -g yarn && ln -sf \$(which yarn) /usr/bin/yarn"
+            return 1
         fi
         ok "Node $(node --version 2>/dev/null) / Yarn $(yarn --version 2>/dev/null) ready"
 
@@ -2645,7 +2665,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.4)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.5)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
