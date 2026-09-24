@@ -2150,33 +2150,57 @@ blueprints_menu() {
         rm -rf "$BP_TMP"
         ok "Files copied"
 
-        # Ensure Node.js + Yarn are installed (Blueprint requires both)
-        # Always ensure Node.js >= 20 (Blueprint requires it)
+        # Ensure Node.js + Yarn are installed.
+        # Current Blueprint releases require Node.js >= 22.
+        # Use Node.js 22 LTS for a stable, predictable Blueprint runtime.
+        NODE_REQUIRED_MAJOR=22
         NODE_MAJOR=$(node --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
-        if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
-            info "Installing Node.js 20 (current: ${NODE_MAJOR:-none})..."
+
+        if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt "$NODE_REQUIRED_MAJOR" ]; then
+            info "Installing Node.js ${NODE_REQUIRED_MAJOR} LTS (current: ${NODE_MAJOR:-none})..."
+
             # Purge ALL old node packages and binaries
             DEBIAN_FRONTEND=noninteractive apt-get purge -y nodejs npm libnode-dev 'libnode*' 2>/dev/null || true
             apt-get autoremove -y &>/dev/null || true
+
             rm -f /usr/bin/node /usr/bin/nodejs /usr/bin/npm /usr/bin/npx
             rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
             hash -r 2>/dev/null || true
-            # Remove any broken third-party repos that block apt update
+
+            # Remove stale/broken NodeSource configuration
+            rm -f /etc/apt/sources.list.d/nodesource.list
+            rm -f /etc/apt/sources.list.d/node_*.list
+            rm -f /usr/share/keyrings/nodesource.gpg
+
+            # Remove unrelated broken third-party repos that can block apt
             rm -f /etc/apt/sources.list.d/*ookla* /etc/apt/sources.list.d/*speedtest*                   /etc/apt/trusted.gpg.d/*ookla* /usr/share/keyrings/*ookla* 2>/dev/null || true
-            # Add NodeSource repo and install
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-            # Flush shell command cache so new binary is found
-            hash -r 2>/dev/null || true
-            # Verify
-            NODE_MAJOR=$(/usr/bin/node --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
-            if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
-                err "Node.js 20 install failed (got: $(/usr/bin/node --version 2>/dev/null || echo none))"
+
+            # Add NodeSource Node.js 22 repository
+            if ! curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; then
+                err "Failed to configure NodeSource for Node.js ${NODE_REQUIRED_MAJOR}."
                 return 1
             fi
-            # Point node/npm to new binaries explicitly
+
+            if ! DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs; then
+                err "Failed to install Node.js ${NODE_REQUIRED_MAJOR}."
+                return 1
+            fi
+
+            # Flush shell command cache so the new binary is found
+            hash -r 2>/dev/null || true
+
+            # Verify
+            NODE_MAJOR=$(/usr/bin/node --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+            if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt "$NODE_REQUIRED_MAJOR" ]; then
+                err "Node.js ${NODE_REQUIRED_MAJOR}+ install failed."
+                err "Detected: $(/usr/bin/node --version 2>/dev/null || echo none)"
+                return 1
+            fi
+
+            # Point node/npm to the installed binaries explicitly
             ln -sf /usr/bin/node /usr/local/bin/node 2>/dev/null || true
             ln -sf /usr/bin/npm  /usr/local/bin/npm  2>/dev/null || true
+            ln -sf /usr/bin/npx  /usr/local/bin/npx  2>/dev/null || true
         fi
         if ! command -v yarn &>/dev/null; then
             info "Installing Yarn..."
