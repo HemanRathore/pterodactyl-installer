@@ -519,7 +519,7 @@ ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
     echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.5.0  ⚡⚡              ║${RESET}"
-    echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
+    echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  MoradoSolution  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://moradosolution.com  •  discord.gg/moradosolution          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
     echo -e "${BOLD}${WHITE}  ╚══════════════════════════════════════════════════════════════╝${RESET}"
@@ -2233,7 +2233,23 @@ blueprints_menu() {
         chmod +x /var/www/pterodactyl/blueprint.sh
         cd /var/www/pterodactyl || return 1
 
-        info "Running blueprint.sh (this will take ~2-3 minutes)..."
+        info "Installing Blueprint system dependencies (zip + unzip)..."
+    apt-get update -qq
+    apt-get install -y zip unzip
+
+    if ! command -v zip >/dev/null 2>&1; then
+        err "Required dependency 'zip' could not be installed."
+        return 1
+    fi
+
+    if ! command -v unzip >/dev/null 2>&1; then
+        err "Required dependency 'unzip' could not be installed."
+        return 1
+    fi
+
+    ok "Blueprint system dependencies ready: zip + unzip"
+
+    info "Running blueprint.sh (this will take ~2-3 minutes)..."
         bash /var/www/pterodactyl/blueprint.sh
         local EXIT_CODE=$?
 
