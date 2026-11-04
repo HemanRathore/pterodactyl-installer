@@ -1404,6 +1404,19 @@ _download_wings_binary() {
     fi
 }
 
+_wings_version_output_is_valid() {
+    local version_line version_value
+    version_line="${1%%$'\n'*}"
+    case "$version_line" in
+        "wings "*) version_value="${version_line#wings }" ;;
+        *) return 1 ;;
+    esac
+    while [[ "$version_value" == v* ]]; do
+        version_value="${version_value#v}"
+    done
+    [[ "$version_value" == [0-9]* ]]
+}
+
 _do_install_wings() {
     local WINGS_DOMAIN WINGS_EMAIL CERTBOT_RC NGINX_WAS_ACTIVE=false
 
@@ -1500,7 +1513,7 @@ _do_install_wings() {
     _download_wings_binary "$WINGS_TMP" "$ARCH" || return 1
     chmod 755 "$WINGS_TMP"
     if ! WINGS_VERSION=$("$WINGS_TMP" version 2>&1) ||
-        ! printf '%s\n' "$WINGS_VERSION" | grep -qE '^wings vv?[0-9]+'; then
+        ! _wings_version_output_is_valid "$WINGS_VERSION"; then
         rm -f "$WINGS_TMP"
         err "Downloaded Wings binary failed validation using its version command."
         [ -z "$WINGS_VERSION" ] || info "Wings reported: ${WINGS_VERSION}"
@@ -2218,7 +2231,7 @@ _update_wings_core() {
         err "Downloaded Wings binary failed validation."
         return 1
     }
-    if ! printf '%s\n' "$version" | grep -qE '^wings vv?[0-9]+'; then
+    if ! _wings_version_output_is_valid "$version"; then
         rm -f "$temp"
         err "Downloaded Wings binary returned an unexpected version response."
         return 1
