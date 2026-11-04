@@ -294,7 +294,9 @@ During Wings installation, enter the node's public FQDN and an email to request 
 Let's Encrypt certificate automatically, or leave the hostname blank to skip it.
 The hostname must resolve to the node and inbound TCP port 80 must be reachable;
 Nginx is stopped briefly if it is active so Certbot's standalone HTTP challenge
-can bind that port. Use the same FQDN in the Panel's node settings. After running
+can bind that port. A valid certificate already issued for the node is reused on
+retries instead of requesting it again. Certbot logs are written to
+`/var/log/letsencrypt/letsencrypt.log`. Use the same FQDN in the Panel's node settings. After running
 the Panel's `wings configure` auto-deploy command, the installer watches for
 `/etc/pterodactyl/config.yml`, restarts Wings automatically, and records the
 service status in the systemd journal. Check it with
