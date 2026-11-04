@@ -14,7 +14,7 @@
 **The most complete Pterodactyl installer & management tool. One command. Everything included.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v4.4.0-blue.svg)](https://github.com/HemanRathore/pterodactyl-installer/releases)
+[![Version](https://img.shields.io/badge/version-v4.5.0-blue.svg)](https://github.com/HemanRathore/pterodactyl-installer/releases)
 [![Pterodactyl](https://img.shields.io/badge/Pterodactyl-Panel%20%2B%20Wings-green.svg)](https://pterodactyl.io)
 [![Discord](https://img.shields.io/discord/YOUR_DISCORD_ID?label=Discord&logo=discord)](https://discord.gg/zynrcloud)
 
@@ -30,7 +30,8 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/HemanRathore/pterodactyl-installer/main/install.sh)
 ```
 
-> Run as **root** on a fresh Ubuntu 22.04 / Debian 12 server. That's it.
+> Run as **root** on a fresh Ubuntu 22.04/24.04/26.04 or Debian 12/13 server.
+> The installer uses a supported PHP 8.2/8.3 release from configured repositories.
 
 ---
 
@@ -56,6 +57,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/HemanRathore/pterodactyl-ins
 | `[7]` Update Panel | Downloads latest release, runs migrations |
 | `[8]` Update Wings | Downloads latest Wings binary |
 | `[9]` Update Both | Panel + Wings in one go |
+| `[22]` Safe Update All | Backs up Panel files/database, then updates system packages, PHP, Panel, and Wings |
+
+Option `[22]` requires confirmation, creates a root-only Panel file/database backup,
+validates the downloaded Panel archive, stages Composer dependencies before switching
+Panel files, and backs up the Wings binary before replacement. System updates use
+`apt-get upgrade` (no package removals); service restarts may occur. The installer
+uses the latest stable Panel/Wings releases rather than pinning a stale version.
 
 ### 🛠️ Fix / Manage
 | Option | Description |
@@ -163,10 +171,19 @@ Then run option `[21]` from the script.
 
 | OS | Version | Status |
 |----|---------|--------|
-| Ubuntu | 20.04, 22.04, 24.04 | ✅ Fully supported |
-| Debian | 11 (Bullseye) | ✅ Fully supported |
-| Debian | 12 (Bookworm) | ✅ Fully supported |
-| Debian | 13 (Trixie) | ✅ Supported (uses Bookworm PHP repo) |
+| Ubuntu | 22.04, 24.04, 26.04 | ✅ Supported (PHP 8.2/8.3 only) |
+| Debian | 12 (Bookworm), 13 (Trixie) | ✅ Supported (PHP 8.2/8.3 only) |
+
+Pterodactyl and PHP security fixes come from their upstream stable release and
+the configured operating-system repositories. Run option `[22]` regularly to
+apply available system/PHP package security updates along with Panel and Wings
+updates; verify repository package updates are available for the installed PHP
+branch before relying on them for a particular advisory.
+
+The current upstream Panel security release identifies PHP 8.2.35 and 8.3.36
+as minimum fixed versions for its PHP-related advisory. New installs and Panel
+updates refuse to proceed below those levels; use a trusted repository that
+provides patched packages if the OS repository has not published them yet.
 
 ---
 
@@ -191,6 +208,11 @@ chmod +x /root/zynrcloud-pterodactyl.sh && sudo bash /root/zynrcloud-pterodactyl
 - Root access
 - Domain name pointed to server IP (for SSL install)
 - Port 80 and 443 open (or Cloudflare Tunnel)
+
+For Cloudflare Tunnel mode, create the tunnel in the Cloudflare dashboard and add
+a public hostname for the panel with service `http://localhost:80`. The installer
+configures Nginx for that local HTTP origin, installs `cloudflared`, and validates
+the token service; it cannot create the Cloudflare dashboard hostname for you.
 
 ---
 

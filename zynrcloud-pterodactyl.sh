@@ -9,7 +9,7 @@
 #  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
 #
 #  ══════════════════════════════════════════════════════════════════════
-#  ★★★   PTERODACTYL MASTER COMMAND  v4.4.14  — by ZynrCloud   ★★★
+#  ★★★   PTERODACTYL MASTER COMMAND  v4.5.0  — by ZynrCloud   ★★★
 #  ══════════════════════════════════════════════════════════════════════
 #
 #         ░▒▓█  PROUDLY HOSTED & POWERED BY  Z Y N R C L O U D  █▓▒░
@@ -18,7 +18,7 @@
 #         Discord  :  https://discord.gg/zynrcloud
 #         GitHub   :  https://github.com/zynrcloud
 #         Developer:  ZynrCloud Core Infrastructure Team
-#         Script   :  zynrcloud-pterodactyl.sh  v4.4.14
+#         Script   :  zynrcloud-pterodactyl.sh  v4.5.0
 #
 #  ══════════════════════════════════════════════════════════════════════
 #  ZynrCloud delivers enterprise-grade game server hosting, VPS, and
@@ -30,6 +30,12 @@
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'
 WHITE='\033[1;37m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+
+PHP_VER=""
+PHP_BIN=""
+PHP_FPM_SERVICE=""
+PHP_FPM_SOCK=""
+PHP_ETC_DIR=""
 
 ok()   { echo -e "${GREEN}  [✔] $*${RESET}"; }
 err()  { echo -e "${RED}  [✘] $*${RESET}"; }
@@ -47,6 +53,81 @@ require_root() {
 detect_os() {
     [ -f /etc/os-release ] && . /etc/os-release && OS=$ID && OS_VERSION=$VERSION_ID \
         || { err "Cannot detect OS"; exit 1; }
+
+    case "${OS}:${OS_VERSION}" in
+        ubuntu:22.04|ubuntu:24.04|ubuntu:26.04|debian:12|debian:13)
+            ;;
+        *)
+            err "Unsupported OS: ${OS} ${OS_VERSION}"
+            err "Supported systems: Ubuntu 22.04/24.04/26.04 and Debian 12/13."
+            exit 1
+            ;;
+    esac
+}
+
+_set_php_runtime() {
+    PHP_VER="$1"
+    PHP_BIN="/usr/bin/php${PHP_VER}"
+    PHP_FPM_SERVICE="php${PHP_VER}-fpm"
+    PHP_FPM_SOCK="/run/php/php${PHP_VER}-fpm.sock"
+    PHP_ETC_DIR="/etc/php/${PHP_VER}"
+}
+
+select_php_runtime() {
+    local version
+    local candidates
+
+    case "${OS}:${OS_VERSION}" in
+        debian:13|ubuntu:26.04)
+            candidates="8.3 8.2"
+            ;;
+        ubuntu:22.04|ubuntu:24.04)
+            candidates="8.3 8.2"
+            ;;
+        debian:12)
+            candidates="8.3 8.2"
+            ;;
+        *)
+            err "Cannot select PHP for ${OS} ${OS_VERSION}"
+            return 1
+            ;;
+    esac
+
+    for version in $candidates; do
+        if apt-cache show "php${version}-fpm" 2>/dev/null | grep -q '^Package:'; then
+            _set_php_runtime "$version"
+            ok "Selected PHP ${PHP_VER} from configured APT repositories"
+            return 0
+        fi
+    done
+
+    err "No compatible PHP-FPM package is available for ${OS} ${OS_VERSION}."
+    return 1
+}
+
+verify_php_security_level() {
+    local installed_version minimum_version
+    installed_version=$("$PHP_BIN" -r 'echo PHP_VERSION;' 2>/dev/null) || {
+        err "Could not read the selected PHP runtime version."
+        return 1
+    }
+
+    case "$PHP_VER" in
+        8.2) minimum_version="8.2.35" ;;
+        8.3) minimum_version="8.3.36" ;;
+        *)
+            err "PHP ${PHP_VER} is not covered by the current Pterodactyl security-release guidance."
+            err "Use PHP 8.2.35+ or 8.3.36+ before updating/serving the Panel."
+            return 1
+            ;;
+    esac
+
+    if ! dpkg --compare-versions "$installed_version" ge "$minimum_version"; then
+        err "PHP ${installed_version} is below the security fix level ${minimum_version}."
+        err "Update all packages for the selected PHP branch, then retry."
+        return 1
+    fi
+    ok "PHP ${installed_version} meets the current security fix level."
 }
 
 # Spinner — call after backgrounding a command with &
@@ -67,11 +148,10 @@ spinner() {
 nginx_available() { command -v nginx &>/dev/null; }
 
 # ═══════════════════════════════════════════════════════════════
-#   ADD PHP REPO + INSTALL PHP 8.2  (Ubuntu 20/22/24 + Debian 11/12/13)
-#   Always ensures php8.2-fpm is actually installable
+#   ADD PHP REPOSITORY
 # ═══════════════════════════════════════════════════════════════
 _add_php_repo() {
-    step "PHP 8.2 Repository"
+    step "PHP Repository"
 
     # Detect OS first
     local DISTRO CODENAME
@@ -79,13 +159,11 @@ _add_php_repo() {
     CODENAME=$( . /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-$(lsb_release -sc 2>/dev/null)}")
     ok "OS: ${DISTRO} ${CODENAME}"
 
-    # Check if php8.2-fpm already available
-    if apt-cache show php8.2-fpm &>/dev/null 2>&1; then
-        ok "PHP 8.2 packages already available in apt"
+    if select_php_runtime; then
         return 0
     fi
 
-    info "PHP 8.2 not in apt — installing base tools..."
+    info "Required PHP packages are not in the current repositories — installing repository tools..."
 
     # Minimal base tools — different sets for Ubuntu vs Debian
     if [[ "$DISTRO" == "ubuntu" ]]; then
@@ -111,22 +189,17 @@ _add_php_repo() {
         info "curl not found — will use wget as fallback"
     fi
 
-    # ── Ubuntu: use Ondrej PPA ────────────────────────────────
+    # ── Ubuntu: use Ondrej PPA where the release is supported ─
     if [[ "$DISTRO" == "ubuntu" ]]; then
         info "Adding ppa:ondrej/php (Ubuntu ${CODENAME})..."
         rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php-*.list 2>/dev/null
-        LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php 2>&1 | tail -3
+        if ! LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php 2>&1 | tail -3; then
+            warn "Ondrej PHP PPA is unavailable for ${CODENAME}; using native packages only."
+        fi
 
     # ── Debian: use packages.sury.org ────────────────────────
     else
-        # Map Debian testing/unstable/future to bookworm (last stable)
         local SURY_CN="$CODENAME"
-        case "$CODENAME" in
-            trixie|forky|sid|unstable|testing|"")
-                SURY_CN="bookworm"
-                warn "Debian ${CODENAME} — using 'bookworm' Sury repo (compatible)"
-                ;;
-        esac
 
         info "Adding Sury PHP repo for Debian ${SURY_CN}..."
 
@@ -155,19 +228,11 @@ _add_php_repo() {
     info "Running apt-get update after repo add..."
     DEBIAN_FRONTEND=noninteractive apt-get update -y 2>&1 | grep -E "^(Get|Err|W:|E:)" | head -10
 
-    # Final check
-    if apt-cache show php8.2-fpm &>/dev/null 2>&1; then
-        ok "PHP 8.2 packages now available"
+    if select_php_runtime; then
         return 0
     else
-        err "PHP 8.2 still not available after repo add!"
+        err "No supported PHP-FPM package is available after repository setup."
         err "OS: ${DISTRO} ${CODENAME}  |  Sury target: ${SURY_CN:-$CODENAME}"
-        err ""
-        err "Manual fix — run these on your server:"
-        err "  apt-get install -y curl gpg"
-        err "  curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor > /usr/share/keyrings/sury-php.gpg"
-        err "  echo 'deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ bookworm main' > /etc/apt/sources.list.d/sury-php.list"
-        err "  apt-get update && apt-get install -y php8.2-fpm"
         return 1
     fi
 }
@@ -188,7 +253,7 @@ show_banner() {
 ASCIIEOF
     echo -e "${RESET}"
     echo -e "${BOLD}${WHITE}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.4.14  ⚡⚡              ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ⚡⚡  PTERODACTYL MASTER COMMAND  v4.5.0  ⚡⚡              ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ░▒▓█  Hosted & Powered by  Z Y N R C L O U D  █▓▒░         ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🌐  https://zynrcloud.com  •  discord.gg/zynrcloud          ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  🚀  Enterprise Game Hosting • VPS • Managed Pterodactyl     ║${RESET}"
@@ -217,6 +282,7 @@ main_menu() {
     echo -e "  ${YELLOW}[7]${RESET}   🔄  Update Panel"
     echo -e "  ${YELLOW}[8]${RESET}   🔄  Update Wings"
     echo -e "  ${YELLOW}[9]${RESET}   🔄  Update Both (Panel + Wings)"
+    echo -e "  ${YELLOW}[22]${RESET}  🔒  Safe Update All (System + PHP + Panel + Wings)"
     hsep
     echo -e "  ${BOLD}${CYAN}── FIX / MANAGE ────────────────────────────────────────${RESET}"
     echo -e "  ${CYAN}[10]${RESET}  🛠️   Fix / Repair Panel"
@@ -245,6 +311,7 @@ main_menu() {
         7)  update_panel ;;
         8)  update_wings ;;
         9)  update_panel; update_wings ;;
+        22) update_all_safe ;;
         10) fix_panel ;;
         11) fix_wings ;;
         12) blueprints_menu ;;
@@ -296,7 +363,7 @@ _do_install_panel() {
     DEBIAN_FRONTEND=noninteractive apt-get update -y &>/dev/null
     ok "Package lists updated"
 
-    # 2 ── PHP 8.2 repo (before any PHP package install)
+    # 2 ── PHP repository (before any PHP package install)
     _add_php_repo || {
         err "Failed to add PHP repo. Cannot continue."
         return 1
@@ -315,14 +382,12 @@ _do_install_panel() {
         rm -rf /etc/mysql /var/lib/mysql /var/run/mysqld /var/log/mysql
         apt-get autoremove -y &>/dev/null
     fi
-    # If a broken/partial PHP 8.2 install exists, purge and wipe it
-    if dpkg -l php8.2-common 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
-        info "Removing broken PHP 8.2 install..."
-        DEBIAN_FRONTEND=noninteractive apt-get purge -y "php8.2*" 2>/dev/null || true
-        rm -rf /etc/php/8.2 /usr/lib/php/20220829
+    # Repair any broken package state for the selected PHP runtime.
+    if dpkg -l "php${PHP_VER}-common" 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
+        info "Repairing broken PHP ${PHP_VER} install..."
+        dpkg --configure -a 2>/dev/null || true
+        apt-get install -f -y &>/dev/null || true
     fi
-    # Pre-create PHP dirs so post-install scripts never fail on missing paths
-    mkdir -p /etc/php/8.2/mods-available /etc/php/8.2/cli/conf.d /etc/php/8.2/fpm/conf.d
     # Fix any other broken dpkg state before installing
     dpkg --configure -a 2>/dev/null || true
     apt-get install -f -y &>/dev/null || true
@@ -330,14 +395,16 @@ _do_install_panel() {
 
     # 3 ── Core packages
     step "Core Dependencies"
-    info "Installing PHP 8.2 + MariaDB + Redis..."
+    info "Installing PHP ${PHP_VER} + MariaDB + Redis..."
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         curl tar unzip git wget gnupg2 ca-certificates \
         lsb-release apt-transport-https \
-        php8.2 php8.2-cli php8.2-gd php8.2-mysql php8.2-pdo \
-        php8.2-mbstring php8.2-tokenizer php8.2-bcmath php8.2-xml \
-        php8.2-fpm php8.2-curl php8.2-zip \
-        mariadb-server redis-server
+        "php${PHP_VER}" "php${PHP_VER}-cli" "php${PHP_VER}-gd" \
+        "php${PHP_VER}-mysql" "php${PHP_VER}-mbstring" \
+        "php${PHP_VER}-bcmath" "php${PHP_VER}-xml" \
+        "php${PHP_VER}-fpm" "php${PHP_VER}-curl" "php${PHP_VER}-zip" \
+        "php${PHP_VER}-intl" \
+        mariadb-server redis-server cron
     local PKG_EXIT=$?
     if [ $PKG_EXIT -ne 0 ]; then
         # Last resort: fix broken state and retry once
@@ -345,10 +412,12 @@ _do_install_panel() {
         dpkg --configure -a 2>/dev/null || true
         apt-get install -f -y &>/dev/null || true
         DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            php8.2 php8.2-cli php8.2-gd php8.2-mysql php8.2-pdo \
-            php8.2-mbstring php8.2-tokenizer php8.2-bcmath php8.2-xml \
-            php8.2-fpm php8.2-curl php8.2-zip \
-            mariadb-server redis-server
+            "php${PHP_VER}" "php${PHP_VER}-cli" "php${PHP_VER}-gd" \
+            "php${PHP_VER}-mysql" "php${PHP_VER}-mbstring" \
+            "php${PHP_VER}-bcmath" "php${PHP_VER}-xml" \
+            "php${PHP_VER}-fpm" "php${PHP_VER}-curl" "php${PHP_VER}-zip" \
+            "php${PHP_VER}-intl" \
+            mariadb-server redis-server cron
         PKG_EXIT=$?
     fi
     if [ $PKG_EXIT -ne 0 ]; then
@@ -357,13 +426,14 @@ _do_install_panel() {
         return 1
     fi
 
-    # Verify PHP 8.2 is actually installed and working
-    if ! php8.2 --version &>/dev/null; then
-        err "php8.2 binary not found after install — something went wrong"
-        err "Try manually: apt-get install -y php8.2 php8.2-fpm"
+    # Verify the selected PHP runtime is installed and working.
+    if ! "$PHP_BIN" --version &>/dev/null; then
+        err "${PHP_BIN} binary not found after install — something went wrong"
+        err "Try manually: apt-get install -y php${PHP_VER} php${PHP_VER}-fpm"
         return 1
     fi
-    ok "PHP 8.2 installed: $(php8.2 --version 2>/dev/null | head -1)"
+    ok "PHP ${PHP_VER} installed: $("$PHP_BIN" --version 2>/dev/null | head -1)"
+    verify_php_security_level || return 1
     ok "MariaDB + Redis installed"
 
     # 4 ── Start Redis NOW (artisan commands need it)
@@ -384,23 +454,23 @@ _do_install_panel() {
     rm -f /etc/nginx/sites-enabled/default
 
     # 6 ── PHP-FPM
-    systemctl enable php8.2-fpm &>/dev/null
-    systemctl restart php8.2-fpm &>/dev/null
+    systemctl enable "$PHP_FPM_SERVICE" &>/dev/null
+    systemctl restart "$PHP_FPM_SERVICE" &>/dev/null
     sleep 3
-    if [ -S "/run/php/php8.2-fpm.sock" ]; then
-        ok "PHP 8.2-FPM running — socket ready"
+    if [ -S "$PHP_FPM_SOCK" ]; then
+        ok "PHP ${PHP_VER}-FPM running — socket ready"
     else
-        err "PHP 8.2-FPM socket not found after start!"
-        err "Logs: journalctl -u php8.2-fpm -n 20"
-        journalctl -u php8.2-fpm --no-pager -n 10 --no-hostname 2>/dev/null
+        err "PHP ${PHP_VER}-FPM socket not found after start!"
+        err "Logs: journalctl -u ${PHP_FPM_SERVICE} -n 20"
+        journalctl -u "$PHP_FPM_SERVICE" --no-pager -n 10 --no-hostname 2>/dev/null
         return 1
     fi
 
     # 7 ── Composer
     step "Composer"
     if ! command -v composer &>/dev/null; then
-        curl -sS https://getcomposer.org/installer \
-            | php -- --install-dir=/usr/local/bin --filename=composer &>/dev/null
+        curl -fsSL --retry 3 https://getcomposer.org/installer \
+            | "$PHP_BIN" -- --install-dir=/usr/local/bin --filename=composer &>/dev/null
     fi
     ok "Composer: $(composer --version 2>/dev/null | head -1)"
 
@@ -433,11 +503,11 @@ SQLEOF
     step "Composer Dependencies"
     cp .env.example .env
     info "Running composer install (may take ~60s)..."
-    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader 2>/dev/null
+    COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" "$(command -v composer)" install --no-dev --optimize-autoloader 2>/dev/null
     ok "Composer install complete"
 
     # 11 ── App key
-    php artisan key:generate --force &>/dev/null
+    "$PHP_BIN" artisan key:generate --force &>/dev/null
     ok "Application key generated"
 
     # 12 ── Env setup
@@ -453,7 +523,7 @@ SQLEOF
         CACHE_DRV="redis"; SESSION_DRV="redis"; QUEUE_DRV="redis"
     fi
 
-    php artisan p:environment:setup \
+    "$PHP_BIN" artisan p:environment:setup \
         --author="$PANEL_EMAIL" \
         --url="$PANEL_URL" \
         --timezone="UTC" \
@@ -465,7 +535,7 @@ SQLEOF
         --redis-port=6379 \
         --no-interaction &>/dev/null
 
-    php artisan p:environment:database \
+    "$PHP_BIN" artisan p:environment:database \
         --host=127.0.0.1 --port=3306 \
         --database=panel --username=pterodactyl \
         --password="$DB_ROOT_PASS" \
@@ -478,18 +548,13 @@ SQLEOF
 
     # Verify PHP version meets Pterodactyl's requirement (>= 8.2)
     local PHP_INSTALLED_VER
-    PHP_INSTALLED_VER=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;" 2>/dev/null)
-    if [[ "$PHP_INSTALLED_VER" < "8.2" ]]; then
-        err "PHP version too old: ${PHP_INSTALLED_VER} — Pterodactyl requires >= 8.2"
-        err "The 'php' command is pointing to the wrong version."
-        info "Switching default PHP to 8.2..."
-        update-alternatives --set php /usr/bin/php8.2 &>/dev/null || true
-        update-alternatives --set php-config /usr/bin/php-config8.2 &>/dev/null || true
-        PHP_INSTALLED_VER=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;" 2>/dev/null)
-        ok "PHP CLI now: $(php --version 2>/dev/null | head -1)"
+    PHP_INSTALLED_VER=$("$PHP_BIN" -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;" 2>/dev/null)
+    if [[ "$PHP_INSTALLED_VER" != "8.2" && "$PHP_INSTALLED_VER" != "8.3" ]]; then
+        err "Selected PHP ${PHP_INSTALLED_VER} is outside the Panel's currently supported 8.2/8.3 range."
+        return 1
     fi
 
-    php artisan migrate --seed --force
+    "$PHP_BIN" artisan migrate --seed --force
     if [ $? -ne 0 ]; then
         err "Migrations failed — check output above"
         err "Common causes: wrong DB password, DB not running, PHP version mismatch"
@@ -499,7 +564,7 @@ SQLEOF
 
     # 14 ── Admin user
     step "Admin User"
-    php artisan p:user:make \
+    "$PHP_BIN" artisan p:user:make \
         --email="$ADMIN_EMAIL" --username="$ADMIN_USER" \
         --name-first="ZynrCloud" --name-last="Admin" \
         --password="$ADMIN_PASS" --admin=1 &>/dev/null
@@ -508,13 +573,14 @@ SQLEOF
     # 15 ── Permissions + cron
     step "Permissions + Cron"
     chown -R www-data:www-data /var/www/pterodactyl
+    systemctl enable --now cron &>/dev/null
     crontab -l 2>/dev/null | grep -v 'pterodactyl' | crontab -
-    (crontab -l 2>/dev/null; echo "* * * * * /usr/bin/php8.2 /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
+    (crontab -l 2>/dev/null; echo "* * * * * ${PHP_BIN} /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
     ok "Permissions set + cron registered"
 
     # 16 ── Queue worker
     step "Queue Worker (pteroq)"
-    cat > /etc/systemd/system/pteroq.service << 'PTEROQEOF'
+    cat > /etc/systemd/system/pteroq.service << PTEROQEOF
 # ZynrCloud — Pterodactyl Queue Worker
 [Unit]
 Description=Pterodactyl Queue Worker (ZynrCloud)
@@ -524,7 +590,7 @@ After=redis-server.service mariadb.service
 User=www-data
 Group=www-data
 Restart=always
-ExecStart=/usr/bin/php8.2 /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
+ExecStart=${PHP_BIN} /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
 StartLimitInterval=180
 StartLimitBurst=30
 RestartSec=5s
@@ -547,10 +613,10 @@ PTEROQEOF
 # ── Nginx vhosts ─────────────────────────────────────────────
 
 _nginx_php_block() {
-    cat << 'PHPEOF'
+    cat << 'PHPEOF' | sed "s|__PHP_FPM_SOCKET__|${PHP_FPM_SOCK}|g"
     location ~ \.php$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+        fastcgi_pass unix:__PHP_FPM_SOCKET__;
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param PHP_VALUE "upload_max_filesize = 100M \n post_max_size = 100M";
@@ -590,7 +656,7 @@ server {
     location / { try_files \$uri \$uri/ /index.php?\$query_string; }
     location ~ \.php\$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+        fastcgi_pass unix:${PHP_FPM_SOCK};
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param PHP_VALUE "upload_max_filesize = 100M \n post_max_size = 100M";
@@ -679,7 +745,7 @@ server {
 
     location ~ \.php\$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+        fastcgi_pass unix:${PHP_FPM_SOCK};
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param PHP_VALUE "upload_max_filesize = 100M \n post_max_size = 100M";
@@ -714,7 +780,10 @@ CFNGINX
 _post_cf_setup() {
     local DOMAIN="$1"
     step "Cloudflare Tunnel — Token Setup"
-    _install_cloudflared
+    if ! _install_cloudflared; then
+        err "cloudflared installation failed; tunnel setup cannot continue."
+        return 1
+    fi
 
     echo ""
     echo -e "${BOLD}${CYAN}  ╔══════════════════════════════════════════════════════════════╗${RESET}"
@@ -736,6 +805,8 @@ _post_cf_setup() {
     echo ""
 
     ask "Paste your Cloudflare Tunnel token here:"; read -r CF_TOKEN
+    CF_TOKEN="${CF_TOKEN#"${CF_TOKEN%%[![:space:]]*}"}"
+    CF_TOKEN="${CF_TOKEN%"${CF_TOKEN##*[![:space:]]}"}"
 
     if [ -z "$CF_TOKEN" ]; then
         warn "No token entered. You can run option [15] → Install with Token later."
@@ -744,23 +815,33 @@ _post_cf_setup() {
     fi
 
     info "Installing cloudflared service with token..."
-    # This is the CORRECT method — single command, no browser login needed
-    cloudflared service install "$CF_TOKEN"
+    systemctl stop cloudflared 2>/dev/null || true
+    cloudflared service uninstall 2>/dev/null || true
+    rm -f /etc/systemd/system/cloudflared.service
+    systemctl daemon-reload
 
-    if [ $? -eq 0 ]; then
-        systemctl enable --now cloudflared &>/dev/null
-        sleep 2
-        if systemctl is-active --quiet cloudflared; then
-            ok "Cloudflared tunnel service running!"
-            ok "Panel should be accessible at: https://${DOMAIN}"
-            info "Check tunnel status at: https://one.dash.cloudflare.com"
-        else
-            warn "Service installed but not active. Checking logs..."
-            journalctl -u cloudflared --no-pager -n 10 --no-hostname 2>/dev/null
-        fi
-    else
-        err "Token install failed. Check your token and try again."
+    # Token-based service installation is non-interactive and does not require
+    # storing the token in this script or a world-readable config file.
+    if ! cloudflared service install "$CF_TOKEN"; then
+        err "Token install failed. Check that the token is complete and has connector permissions."
         info "Manual command: cloudflared service install <YOUR_TOKEN>"
+        return 1
+    fi
+
+    if ! systemctl enable --now cloudflared &>/dev/null; then
+        err "Cloudflared service could not be started."
+        journalctl -u cloudflared --no-pager -n 10 --no-hostname 2>/dev/null || true
+        return 1
+    fi
+    sleep 2
+    if systemctl is-active --quiet cloudflared; then
+        ok "Cloudflared tunnel service running!"
+        ok "Panel should be accessible at: https://${DOMAIN}"
+        info "Check tunnel status at: https://one.dash.cloudflare.com"
+    else
+        err "Cloudflared service is not active. Checking logs..."
+        journalctl -u cloudflared --no-pager -n 10 --no-hostname 2>/dev/null || true
+        return 1
     fi
 }
 
@@ -978,7 +1059,9 @@ uninstall_panel() {
     info "Stopping services..."
     systemctl stop pteroq 2>/dev/null
     systemctl stop nginx 2>/dev/null
-    systemctl stop php8.2-fpm 2>/dev/null
+    if _detect_installed_php_runtime; then
+        systemctl stop "$PHP_FPM_SERVICE" 2>/dev/null
+    fi
     systemctl disable pteroq 2>/dev/null
     ok "Services stopped"
 
@@ -1053,7 +1136,7 @@ uninstall_everything() {
     echo -e "  ${RED}  ✘  Pterodactyl Wings + all server files${RESET}"
     echo -e "  ${RED}  ✘  MariaDB + ALL databases${RESET}"
     echo -e "  ${RED}  ✘  Docker + all containers and images${RESET}"
-    echo -e "  ${RED}  ✘  Redis, Nginx, PHP 8.2, Certbot${RESET}"
+    echo -e "  ${RED}  ✘  Redis, Nginx, PHP, Certbot${RESET}"
     echo -e "  ${RED}  ✘  Node.js, NPM, Yarn${RESET}"
     echo -e "  ${RED}  ✘  Composer${RESET}"
     echo -e "  ${RED}  ✘  Blueprint Framework + all extensions${RESET}"
@@ -1073,7 +1156,7 @@ uninstall_everything() {
     # ═══════════════════════════════════════════════════════════
     step "[ 1/12 ] Stopping All Services"
     # ═══════════════════════════════════════════════════════════
-    for svc in pteroq wings nginx php8.2-fpm php8.1-fpm php8.0-fpm \
+    for svc in pteroq wings nginx php8.5-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm \
                mariadb mysql redis-server redis docker cloudflared; do
         if systemctl is-active --quiet "$svc" 2>/dev/null; then
             systemctl stop "$svc" 2>/dev/null
@@ -1200,14 +1283,14 @@ uninstall_everything() {
     ok "Nginx + all SSL certificates removed"
 
     # ═══════════════════════════════════════════════════════════
-    step "[ 8/12 ] Removing PHP 8.2 + All Extensions"
+    step "[ 8/12 ] Removing PHP + All Extensions"
     # ═══════════════════════════════════════════════════════════
-    _apt_purge 'php8.2*' 'php8.1*' 'php8.0*' 'php7.4*' 'php-*' php-common
+    _apt_purge 'php8.5*' 'php8.4*' 'php8.3*' 'php8.2*' 'php8.1*' 'php8.0*' 'php7.4*' 'php-*' php-common
 
     rm -rf /etc/php
     rm -rf /var/lib/php
     rm -rf /run/php
-    rm -f /usr/bin/php /usr/bin/php8.2 /usr/bin/php8.1
+    rm -f /usr/bin/php /usr/bin/php8.5 /usr/bin/php8.4 /usr/bin/php8.3 /usr/bin/php8.2 /usr/bin/php8.1
 
     # Remove Sury/Ondrej PHP repo
     rm -f /etc/apt/sources.list.d/sury-php.list
@@ -1303,7 +1386,7 @@ uninstall_everything() {
     echo -e "${BOLD}${WHITE}  ║  ✔  Docker + containers    removed                      ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  ✔  Redis                  removed                      ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  ✔  Nginx + SSL certs      removed                      ║${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  ✔  PHP 8.2 + extensions   removed                      ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  ✔  PHP + extensions       removed                      ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  ✔  Node.js + Yarn + NPM   removed                      ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  ✔  Composer               removed                      ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║  ✔  Blueprint Framework     removed                      ║${RESET}"
@@ -1321,22 +1404,13 @@ uninstall_everything() {
 # ═══════════════════════════════════════════════════════════════
 update_panel() {
     show_banner; echo -e "${BOLD}${YELLOW}  🔄 UPDATE PANEL${RESET}"; sep; require_root
-    [ ! -d /var/www/pterodactyl ] && { err "Panel not found"; pause; return; }
-    cp /var/www/pterodactyl/.env \
-        "/var/www/pterodactyl/.env.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null
-    ok ".env backed up"
-    cd /var/www/pterodactyl || exit
-    php artisan down &>/dev/null
-    info "Downloading latest Panel..."; curl -fsSL -o panel.tar.gz \
-        https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-    tar -xzf panel.tar.gz &>/dev/null; rm -f panel.tar.gz; ok "Files updated"
-    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader &>/dev/null & spinner "Composer install"
-    php artisan migrate --force &>/dev/null && ok "Migrations done"
-    php artisan view:clear &>/dev/null; php artisan config:clear &>/dev/null; php artisan route:clear &>/dev/null
-    ok "Caches cleared"
-    chown -R www-data:www-data /var/www/pterodactyl
-    php artisan up &>/dev/null; systemctl restart pteroq
-    sep; ok "Panel updated!"; echo -e "${CYAN}  ★ ZynrCloud — https://zynrcloud.com${RESET}"; pause
+    read -r -p "Back up Panel files/database and update to the latest release? [y/N] " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { warn "Update cancelled."; pause; return; }
+    _update_panel_core
+    local rc=$?
+    sep
+    [ "$rc" -eq 0 ] && ok "Panel update completed." || err "Panel update failed; inspect the backup and logs before retrying."
+    pause
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1344,17 +1418,270 @@ update_panel() {
 # ═══════════════════════════════════════════════════════════════
 update_wings() {
     show_banner; echo -e "${BOLD}${YELLOW}  🔄 UPDATE WINGS${RESET}"; sep; require_root
-    ! command -v wings &>/dev/null && { err "Wings not found"; pause; return; }
-    local OV; OV=$(wings --version 2>/dev/null || echo "unknown")
-    info "Current: ${OV}"; systemctl stop wings 2>/dev/null
-    local ARCH; ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    info "Downloading Wings (${ARCH})..."
-    curl -fsSL -o /usr/local/bin/wings \
-        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${ARCH}"
-    chmod u+x /usr/local/bin/wings
-    systemctl start wings 2>/dev/null
-    ok "Wings updated: ${OV} → $(/usr/local/bin/wings --version 2>/dev/null || echo 'latest')"
-    sep; echo -e "${CYAN}  ★ ZynrCloud — https://zynrcloud.com${RESET}"; pause
+    read -r -p "Back up Wings binary and update to the latest release? [y/N] " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { warn "Update cancelled."; pause; return; }
+    _update_wings_core
+    local rc=$?
+    sep
+    [ "$rc" -eq 0 ] && ok "Wings update completed." || err "Wings update failed; inspect the backup and service logs."
+    pause
+}
+
+_detect_installed_php_runtime() {
+    local version configured_socket
+    configured_socket=$(grep -hE 'fastcgi_pass[[:space:]]+unix:' \
+        /etc/nginx/sites-enabled/pterodactyl.conf /etc/nginx/sites-available/pterodactyl.conf \
+        2>/dev/null | sed -nE 's#.*php([0-9]+\.[0-9]+)-fpm\.sock.*#\1#p' | head -1)
+    if [[ "$configured_socket" =~ ^8\.[0-9]+$ ]] &&
+        [ -x "/usr/bin/php${configured_socket}" ]; then
+        _set_php_runtime "$configured_socket"
+        return 0
+    fi
+
+    for version in 8.5 8.4 8.3 8.2 8.1; do
+        if dpkg-query -W -f='${db:Status-Status}' "php${version}-fpm" 2>/dev/null | grep -q '^installed$'; then
+            _set_php_runtime "$version"
+            return 0
+        fi
+    done
+    if command -v php >/dev/null 2>&1; then
+        version=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null)
+        if [[ "$version" =~ ^8\.[0-9]+$ ]]; then
+            _set_php_runtime "$version"
+            return 0
+        fi
+    fi
+    err "Could not detect an installed PHP 8.x runtime."
+    return 1
+}
+
+_panel_env_value() {
+    local key="$1"
+    (
+        cd /var/www/pterodactyl || exit 1
+        "$PHP_BIN" -r '
+            require "vendor/autoload.php";
+            Dotenv\Dotenv::createImmutable(getcwd())->safeLoad();
+            $key = $argv[1];
+            $value = $_ENV[$key] ?? getenv($key);
+            if ($value !== false && $value !== null) {
+                echo $value;
+            }
+        ' "$key"
+    )
+}
+
+_backup_panel_before_update() {
+    local stamp db_host db_port db_name db_user db_password
+    umask 077
+    stamp=$(date +%Y%m%d%H%M%S)
+    PANEL_BACKUP_DIR="/var/backups/pterodactyl/${stamp}"
+    mkdir -p "$PANEL_BACKUP_DIR" || return 1
+    chmod 700 /var/backups/pterodactyl "$PANEL_BACKUP_DIR" || return 1
+
+    info "Backing up Panel files..."
+    if ! tar -czpf "$PANEL_BACKUP_DIR/panel-files.tar.gz" -C /var/www pterodactyl; then
+        err "Panel file backup failed."
+        return 1
+    fi
+
+    info "Backing up Panel database..."
+    db_host=$(_panel_env_value DB_HOST)
+    db_port=$(_panel_env_value DB_PORT)
+    db_name=$(_panel_env_value DB_DATABASE)
+    db_user=$(_panel_env_value DB_USERNAME)
+    db_password=$(_panel_env_value DB_PASSWORD)
+    db_host=${db_host:-127.0.0.1}
+    db_port=${db_port:-3306}
+    if [[ -z "$db_name" || -z "$db_user" || -z "$db_password" ]]; then
+        err "Could not read Panel database settings from .env; refusing update without a database backup."
+        return 1
+    fi
+    if ! MYSQL_PWD="$db_password" mysqldump --single-transaction --quick \
+        --host="$db_host" --port="$db_port" --user="$db_user" "$db_name" \
+        > "$PANEL_BACKUP_DIR/panel-database.sql"; then
+        err "Panel database backup failed."
+        return 1
+    fi
+    chmod 600 "$PANEL_BACKUP_DIR"/*
+    ok "Backup created at ${PANEL_BACKUP_DIR}"
+}
+
+_resume_panel_after_failed_update() {
+    local root="/var/www/pterodactyl"
+    "$PHP_BIN" "$root/artisan" up >/dev/null 2>&1 || true
+    systemctl start pteroq 2>/dev/null || true
+}
+
+_update_panel_core() {
+    local root="/var/www/pterodactyl"
+    local stamp archive stage previous
+    [ -d "$root" ] || { err "Panel not found at ${root}."; return 1; }
+    [ -f "$root/.env" ] || { err "Panel .env is missing; refusing update."; return 1; }
+    _detect_installed_php_runtime || return 1
+    verify_php_security_level || return 1
+    command -v composer >/dev/null 2>&1 || { err "Composer is not installed."; return 1; }
+    command -v mysqldump >/dev/null 2>&1 || { err "mysqldump is not installed; refusing update without a database backup."; return 1; }
+    if [ "${1:-}" != "backup-ready" ]; then
+        _backup_panel_before_update || return 1
+    fi
+
+    stamp=$(date +%Y%m%d%H%M%S)
+    archive="/var/www/pterodactyl-panel-${stamp}.tar.gz"
+    stage="/var/www/pterodactyl-stage-${stamp}"
+    previous="/var/www/pterodactyl-previous-${stamp}"
+
+    info "Enabling maintenance mode and stopping the queue worker..."
+    "$PHP_BIN" "$root/artisan" down || return 1
+    systemctl stop pteroq 2>/dev/null || true
+
+    info "Downloading the latest stable Panel release..."
+    if ! curl -fsSL --retry 3 --retry-all-errors -o "$archive" \
+        https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz ||
+        ! tar -tzf "$archive" >/dev/null; then
+        rm -f "$archive"
+        err "Panel release download or archive validation failed."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+
+    if ! mkdir -p "$stage" || ! tar -xzf "$archive" -C "$stage" ||
+        [ ! -f "$stage/artisan" ] || [ ! -f "$stage/composer.json" ]; then
+        rm -rf "$stage"
+        rm -f "$archive"
+        err "Panel release archive has an unexpected layout."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    if ! cp "$root/.env" "$stage/.env"; then
+        rm -rf "$stage"
+        rm -f "$archive"
+        err "Could not preserve the Panel environment file."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    rm -rf "$stage/storage"
+    if ! cp -a "$root/storage" "$stage/storage"; then
+        rm -rf "$stage"
+        rm -f "$archive"
+        err "Could not preserve Panel storage."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+
+    info "Installing staged Composer dependencies..."
+    if ! COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" "$(command -v composer)" \
+        --working-dir="$stage" install --no-dev --optimize-autoloader; then
+        rm -rf "$stage"
+        rm -f "$archive"
+        err "Composer failed; existing Panel files were not replaced."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+
+    if ! mv "$root" "$previous" || ! mv "$stage" "$root"; then
+        [ -d "$previous" ] && [ ! -d "$root" ] && mv "$previous" "$root"
+        err "Could not atomically switch Panel files; the previous copy is retained."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    rm -f "$archive"
+
+    info "Running Panel database migrations..."
+    if ! "$PHP_BIN" "$root/artisan" migrate --force; then
+        err "Migration failed. Panel remains in maintenance mode."
+        err "File/database backup: ${PANEL_BACKUP_DIR}"
+        err "Previous application files: ${previous}"
+        return 1
+    fi
+
+    "$PHP_BIN" "$root/artisan" view:clear || return 1
+    "$PHP_BIN" "$root/artisan" config:clear || return 1
+    "$PHP_BIN" "$root/artisan" route:clear || return 1
+    chown -R www-data:www-data "$root"
+    "$PHP_BIN" "$root/artisan" up || return 1
+    systemctl restart pteroq || return 1
+    systemctl reload nginx || return 1
+    rm -rf "$previous"
+    ok "Panel updated; backup retained at ${PANEL_BACKUP_DIR}"
+}
+
+_update_wings_core() {
+    local binary current arch temp backup version
+    binary=$(command -v wings 2>/dev/null) || { warn "Wings is not installed; skipping."; return 0; }
+    current=$("$binary" --version 2>/dev/null || echo "unknown")
+    arch=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    case "$arch" in
+        amd64|arm64) ;;
+        *) err "Unsupported Wings architecture: ${arch}"; return 1 ;;
+    esac
+    mkdir -p /var/backups/pterodactyl
+    chmod 700 /var/backups/pterodactyl
+    backup="/var/backups/pterodactyl/wings-${current}-$(date +%Y%m%d%H%M%S)"
+    temp="${binary}.download.$$"
+    info "Downloading latest Wings release for ${arch}..."
+    if ! curl -fsSL --retry 3 --retry-all-errors -o "$temp" \
+        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${arch}" ||
+        [ ! -s "$temp" ]; then
+        rm -f "$temp"
+        err "Wings download failed."
+        return 1
+    fi
+    chmod 755 "$temp"
+    version=$("$temp" --version 2>/dev/null) || {
+        rm -f "$temp"
+        err "Downloaded Wings binary failed its version check."
+        return 1
+    }
+    cp -p "$binary" "$backup" || { rm -f "$temp"; err "Could not back up Wings."; return 1; }
+    systemctl stop wings || { rm -f "$temp"; return 1; }
+    if ! mv -f "$temp" "$binary" || ! systemctl start wings ||
+        ! systemctl is-active --quiet wings; then
+        systemctl stop wings 2>/dev/null || true
+        cp -p "$backup" "$binary"
+        systemctl start wings 2>/dev/null || true
+        err "Wings failed to start after update; restored ${backup}."
+        return 1
+    fi
+    ok "Wings updated: ${current} → ${version}; backup: ${backup}"
+}
+
+update_all_safe() {
+    show_banner; echo -e "${BOLD}${YELLOW}  🔄 SAFE UPDATE ALL${RESET}"; sep; require_root
+    echo "This updates installed system packages (including PHP and Cloudflared if apt-managed), the Panel, and Wings."
+    echo "Panel files/database and the Wings binary are backed up; services may restart."
+    read -r -p "Continue? [y/N] " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { warn "Update cancelled."; pause; return; }
+
+    if [ -d /var/www/pterodactyl ]; then
+        _detect_installed_php_runtime || { pause; return 1; }
+        command -v mysqldump >/dev/null 2>&1 || {
+            err "mysqldump is not installed; refusing update without a database backup."
+            pause
+            return 1
+        }
+        _backup_panel_before_update || { pause; return 1; }
+    fi
+    step "Updating system and PHP packages"
+    if ! DEBIAN_FRONTEND=noninteractive apt-get update ||
+        ! DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; then
+        err "System package update failed; application updates were not started."
+        pause
+        return 1
+    fi
+
+    if [ -d /var/www/pterodactyl ]; then
+        _update_panel_core backup-ready || { pause; return 1; }
+    else
+        warn "Panel is not installed; skipping Panel update."
+    fi
+    _update_wings_core || { pause; return 1; }
+
+    if [ -f /var/run/reboot-required ]; then
+        warn "A system reboot is required to finish some package updates."
+    fi
+    ok "Safe update completed."
+    pause
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -2126,10 +2453,36 @@ ssl_menu() {
 _install_cloudflared() {
     command -v cloudflared &>/dev/null && { ok "cloudflared: $(cloudflared --version 2>/dev/null | head -1)"; return; }
     info "Installing cloudflared..."
-    local ARCH; ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    curl -fsSL -o /usr/local/bin/cloudflared \
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}"
-    chmod +x /usr/local/bin/cloudflared
+    local ARCH TEMP_BIN
+    ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    case "$ARCH" in
+        amd64|arm64|arm)
+            ;;
+        *)
+            err "Unsupported architecture for cloudflared: ${ARCH}"
+            return 1
+            ;;
+    esac
+    TEMP_BIN="/usr/local/bin/cloudflared.download.$$"
+    rm -f "$TEMP_BIN"
+    if ! curl -fsSL --retry 3 --retry-all-errors -o "$TEMP_BIN" \
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}"; then
+        rm -f "$TEMP_BIN"
+        err "Failed to download cloudflared for ${ARCH}."
+        return 1
+    fi
+    if [ ! -s "$TEMP_BIN" ]; then
+        rm -f "$TEMP_BIN"
+        err "Downloaded cloudflared file is empty."
+        return 1
+    fi
+    chmod 755 "$TEMP_BIN"
+    mv -f "$TEMP_BIN" /usr/local/bin/cloudflared
+    if ! /usr/local/bin/cloudflared --version &>/dev/null; then
+        rm -f /usr/local/bin/cloudflared
+        err "Downloaded cloudflared binary is not executable."
+        return 1
+    fi
     ok "cloudflared: $(cloudflared --version 2>/dev/null | head -1)"
 }
 
@@ -2248,7 +2601,14 @@ status_check() {
     }
     echo -e "\n  ${WHITE}── Services ─────────────────────────────────────────${RESET}"
     _chk "Nginx"           nginx
-    _chk "PHP 8.2-FPM"     php8.2-fpm
+    if _detect_installed_php_runtime; then
+        _chk "PHP ${PHP_VER}-FPM" "$PHP_FPM_SERVICE"
+        [ -S "$PHP_FPM_SOCK" ] \
+            && ok "PHP-FPM socket exists: ${PHP_FPM_SOCK}" \
+            || warn "PHP-FPM socket missing: ${PHP_FPM_SOCK}"
+    else
+        err "No supported PHP-FPM runtime detected."
+    fi
     _chk "MariaDB"         mariadb
     _chk "Redis"           redis-server
     _chk "pteroq"          pteroq
@@ -2571,7 +2931,7 @@ emergency_502_fix() {
 
     # ── Step 1: System update + detect OS ──────────────────────
     step "System Check"
-    detect_os 2>/dev/null || { OS="ubuntu"; OS_VERSION="22.04"; }
+    detect_os || return 1
     ok "OS: ${OS} ${OS_VERSION}"
     info "Running apt-get update..."
     DEBIAN_FRONTEND=noninteractive apt-get update -y &>/dev/null
@@ -2579,42 +2939,27 @@ emergency_502_fix() {
 
     # ── Step 2: PHP — install if missing, detect version ───────
     step "PHP-FPM"
-    local PHP_VER="" PHP_SOCK=""
+    local PHP_SOCK=""
 
-    # Check what's already installed/running
-    for v in 8.3 8.2 8.1; do
-        if dpkg -l "php${v}-fpm" 2>/dev/null | grep -q "^ii" || \
-           systemctl is-active --quiet "php${v}-fpm" 2>/dev/null || \
-           [ -S "/run/php/php${v}-fpm.sock" ]; then
-            PHP_VER="$v"; PHP_SOCK="/run/php/php${v}-fpm.sock"
-            ok "Found installed PHP-FPM: ${PHP_VER}"
-            break
-        fi
-    done
+    if _detect_installed_php_runtime; then
+        PHP_SOCK="$PHP_FPM_SOCK"
+        ok "Found installed PHP-FPM: ${PHP_VER}"
+    else
+        PHP_VER=""
+    fi
 
-    # If nothing found — install PHP 8.2
+    # If nothing found, install the highest supported runtime available.
     if [ -z "$PHP_VER" ]; then
-        warn "PHP-FPM not installed — installing PHP 8.2..."
-        # Add PHP repo
+        warn "PHP-FPM not installed — selecting a supported PHP runtime..."
+        _add_php_repo || return 1
         DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            gnupg2 ca-certificates lsb-release apt-transport-https \
-            software-properties-common &>/dev/null
-
-        LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php &>/dev/null 2>&1 || {
-            curl -fsSL https://packages.sury.org/php/apt.gpg \
-                | gpg --dearmor -o /usr/share/keyrings/sury-php.gpg 2>/dev/null
-            echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" \
-                > /etc/apt/sources.list.d/sury-php.list
-        }
-        DEBIAN_FRONTEND=noninteractive apt-get update -y &>/dev/null
-
-        DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            php8.2 php8.2-cli php8.2-gd php8.2-mysql php8.2-pdo \
-            php8.2-mbstring php8.2-tokenizer php8.2-bcmath php8.2-xml \
-            php8.2-fpm php8.2-curl php8.2-zip &>/dev/null
-
-        PHP_VER="8.2"; PHP_SOCK="/run/php/php8.2-fpm.sock"
-        ok "PHP 8.2 installed"
+            "php${PHP_VER}" "php${PHP_VER}-cli" "php${PHP_VER}-gd" \
+            "php${PHP_VER}-mysql" "php${PHP_VER}-mbstring" \
+            "php${PHP_VER}-bcmath" "php${PHP_VER}-xml" \
+            "php${PHP_VER}-fpm" "php${PHP_VER}-curl" "php${PHP_VER}-zip" \
+            "php${PHP_VER}-intl" || return 1
+        PHP_SOCK="$PHP_FPM_SOCK"
+        ok "PHP ${PHP_VER} installed"
     fi
 
     # Start PHP-FPM
@@ -2664,12 +3009,11 @@ emergency_502_fix() {
         apt-get autoremove -y &>/dev/null
     fi
     # Fix broken PHP too if present
-    if dpkg -l php8.2-common 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
-        warn "Broken PHP 8.2 found — purging..."
-        DEBIAN_FRONTEND=noninteractive apt-get purge -y "php8.2*" 2>/dev/null || true
-        rm -rf /etc/php/8.2 /usr/lib/php/20220829
+    if dpkg -l "php${PHP_VER}-common" 2>/dev/null | grep -qE '^(iF|iU|rH|rc)'; then
+        warn "Broken PHP ${PHP_VER} found — repairing package state..."
+        dpkg --configure -a 2>/dev/null || true
+        apt-get install -f -y &>/dev/null || true
     fi
-    mkdir -p /etc/php/8.2/mods-available /etc/php/8.2/cli/conf.d /etc/php/8.2/fpm/conf.d
     dpkg --configure -a 2>/dev/null || true
     apt-get install -f -y &>/dev/null || true
     if ! dpkg -l mariadb-server 2>/dev/null | grep -q "^ii"; then
@@ -2710,7 +3054,7 @@ emergency_502_fix() {
 
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > /etc/nginx/sites-available/pterodactyl.conf << EMERGENCYNGINX
-# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.4.14)
+# ZynrCloud — Pterodactyl Panel (Emergency Recovery Config v4.5.0)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
