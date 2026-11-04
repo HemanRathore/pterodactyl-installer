@@ -1382,6 +1382,28 @@ _wings_certificate_is_usable() {
             -checkend 0 >/dev/null 2>&1
 }
 
+_download_wings_binary() {
+    local destination="$1"
+    local arch="$2"
+    local url="https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${arch}"
+
+    info "Downloading Wings (${arch}); each attempt is limited to 120 seconds..."
+    if ! curl --fail --location --show-error --progress-bar \
+        --retry 2 --retry-all-errors --retry-max-time 180 \
+        --connect-timeout 15 --max-time 120 \
+        --output "$destination" "$url"; then
+        rm -f "$destination"
+        err "Wings download failed or timed out."
+        err "Check outbound HTTPS access to github.com and release-assets.githubusercontent.com, then retry."
+        return 1
+    fi
+    if [ ! -s "$destination" ]; then
+        rm -f "$destination"
+        err "Wings download completed but returned an empty file."
+        return 1
+    fi
+}
+
 _do_install_wings() {
     local WINGS_DOMAIN WINGS_EMAIL CERTBOT_RC NGINX_WAS_ACTIVE=false
 
@@ -1469,16 +1491,13 @@ _do_install_wings() {
     local ARCH WINGS_TMP WINGS_VERSION
     ARCH=$(dpkg --print-architecture 2>/dev/null \
         || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    case "$ARCH" in
+        amd64|arm64) ;;
+        *) err "Unsupported Wings architecture: ${ARCH}"; return 1 ;;
+    esac
     mkdir -p /etc/pterodactyl
     WINGS_TMP="/usr/local/bin/wings.download.$$"
-    info "Downloading Wings (${ARCH})..."
-    if ! curl -fsSL --retry 3 --retry-all-errors -o "$WINGS_TMP" \
-        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${ARCH}"
-    then
-        rm -f "$WINGS_TMP"
-        err "Wings download failed."
-        return 1
-    fi
+    _download_wings_binary "$WINGS_TMP" "$ARCH" || return 1
     chmod 755 "$WINGS_TMP"
     if ! WINGS_VERSION=$("$WINGS_TMP" version 2>&1) ||
         ! printf '%s\n' "$WINGS_VERSION" | grep -qE '^wings vv?[0-9]+'; then
@@ -2192,13 +2211,7 @@ _update_wings_core() {
     chmod 700 /var/backups/pterodactyl || return 1
     backup="/var/backups/pterodactyl/wings-${current}-$(date +%Y%m%d%H%M%S)"
     temp="${binary}.download.$$"
-    if ! curl -fsSL --retry 3 --retry-all-errors -o "$temp" \
-        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${arch}" ||
-        [ ! -s "$temp" ]; then
-        rm -f "$temp"
-        err "Wings download failed."
-        return 1
-    fi
+    _download_wings_binary "$temp" "$arch" || return 1
     chmod 755 "$temp"
     version=$("$temp" version 2>/dev/null) || {
         rm -f "$temp"
