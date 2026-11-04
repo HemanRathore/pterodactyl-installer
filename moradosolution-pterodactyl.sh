@@ -1448,7 +1448,7 @@ _do_install_wings() {
     systemctl enable --now docker || { err "Docker service could not be started."; return 1; }
 
     step "Wings Binary"
-    local ARCH WINGS_TMP
+    local ARCH WINGS_TMP WINGS_VERSION
     ARCH=$(dpkg --print-architecture 2>/dev/null \
         || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
     mkdir -p /etc/pterodactyl
@@ -1462,13 +1462,19 @@ _do_install_wings() {
         return 1
     fi
     chmod 755 "$WINGS_TMP"
-    if ! "$WINGS_TMP" --version >/dev/null 2>&1 ||
-        ! mv -f "$WINGS_TMP" /usr/local/bin/wings; then
+    if ! WINGS_VERSION=$("$WINGS_TMP" version 2>&1) ||
+        ! printf '%s\n' "$WINGS_VERSION" | grep -qE '^wings v[0-9]+'; then
         rm -f "$WINGS_TMP"
-        err "Downloaded Wings binary failed validation."
+        err "Downloaded Wings binary failed validation using its version command."
+        [ -z "$WINGS_VERSION" ] || info "Wings reported: ${WINGS_VERSION}"
         return 1
     fi
-    ok "Wings: $(/usr/local/bin/wings --version 2>/dev/null || echo 'installed')"
+    if ! mv -f "$WINGS_TMP" /usr/local/bin/wings; then
+        rm -f "$WINGS_TMP"
+        err "Could not install the validated Wings binary."
+        return 1
+    fi
+    ok "Wings: ${WINGS_VERSION%%$'\n'*}"
 
     step "Wings Systemd Service"
     cat > /etc/systemd/system/wings.service << 'WINGSEOF'
@@ -2160,7 +2166,8 @@ _update_panel_core() {
 _update_wings_core() {
     local binary current arch temp backup version
     binary=$(command -v wings 2>/dev/null) || { warn "Wings is not installed; skipping."; return 0; }
-    current=$("$binary" --version 2>/dev/null || echo "unknown")
+    current=$("$binary" version 2>/dev/null | head -1)
+    current=${current:-unknown}
     arch=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
     case "$arch" in amd64|arm64) ;; *) err "Unsupported Wings architecture: ${arch}"; return 1 ;; esac
     mkdir -p /var/backups/pterodactyl || return 1
@@ -2175,11 +2182,16 @@ _update_wings_core() {
         return 1
     fi
     chmod 755 "$temp"
-    version=$("$temp" --version 2>/dev/null) || {
+    version=$("$temp" version 2>/dev/null) || {
         rm -f "$temp"
         err "Downloaded Wings binary failed validation."
         return 1
     }
+    if ! printf '%s\n' "$version" | grep -qE '^wings v[0-9]+'; then
+        rm -f "$temp"
+        err "Downloaded Wings binary returned an unexpected version response."
+        return 1
+    fi
     cp -p "$binary" "$backup" || { rm -f "$temp"; err "Could not back up Wings."; return 1; }
     systemctl stop wings || { rm -f "$temp"; return 1; }
     if ! mv -f "$temp" "$binary" || ! systemctl start wings ||
@@ -2558,7 +2570,7 @@ fix_wings() {
             echo -e "  Wings  : $(systemctl is-active wings 2>/dev/null || echo 'not-found')"
             echo -e "  Docker : $(systemctl is-active docker 2>/dev/null || echo 'not-found')"
             command -v wings &>/dev/null \
-                && echo -e "  Version: $(wings --version 2>/dev/null)" \
+                && echo -e "  Version: $(wings version 2>/dev/null | head -1)" \
                 || echo -e "  Binary : ${RED}NOT FOUND${RESET}"
             [ -f /etc/pterodactyl/config.yml ] \
                 && echo -e "  Config : ${GREEN}EXISTS${RESET}" \
@@ -3198,7 +3210,7 @@ status_check() {
         && echo -e "  🚀 Panel : ${CYAN}v$(grep "'version'" /var/www/pterodactyl/config/app.php | head -1 | awk -F"'" '{print $4}')${RESET}" \
         || echo -e "  🚀 Panel : ${RED}Not installed${RESET}"
     command -v wings &>/dev/null \
-        && echo -e "  🔧 Wings : ${CYAN}$(wings --version 2>/dev/null)${RESET}" \
+        && echo -e "  🔧 Wings : ${CYAN}$(wings version 2>/dev/null | head -1)${RESET}" \
         || echo -e "  🔧 Wings : ${RED}Not installed${RESET}"
     command -v docker &>/dev/null \
         && echo -e "  🐳 Docker: ${CYAN}$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')${RESET}  ($(docker ps -q 2>/dev/null | wc -l) running)" \
