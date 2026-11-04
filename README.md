@@ -180,8 +180,15 @@ The installer manages:
 The installer also checks the Panel's Composer PHP requirements before Panel updates.
 Panel installation and updates also require PHP 8.2.35+ or 8.3.36+, the minimum
 versions named in the current upstream Panel security release. APT-managed PHP
-receives available updates through option `[22]`; source-built PHP is checked
-against the minimum but is not rebuilt by `apt-get upgrade`.
+is upgraded to the newest package available for the selected supported branch
+during Panel updates and option `[22]`; source-built PHP is rebuilt from the
+latest 8.3 release during Panel updates.
+
+PHP 8.5.12 is the newest PHP release overall, but the current Panel's upstream
+Composer requirement is `^8.2 || ^8.3`, which excludes PHP 8.5. The installer
+therefore selects the newest compatible branch (PHP 8.3) for fresh installs and
+fresh reinstalls, and preserves an existing Panel's configured branch while
+upgrading it to the latest available security-patched release.
 
 ### Ubuntu 26.04
 
