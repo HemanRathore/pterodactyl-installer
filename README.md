@@ -177,24 +177,25 @@ The installer manages:
 - Pterodactyl queue worker runtime
 - PHP configuration
 
-The installer also checks the Panel's Composer PHP requirements before Panel updates.
-Panel installation and updates also require PHP 8.2.35+ or 8.3.36+, the minimum
-versions named in the current upstream Panel security release. APT-managed PHP
-is upgraded to the newest package available for the selected supported branch
-during Panel updates and option `[22]`; source-built PHP is rebuilt from the
-latest 8.3 release during Panel updates.
+The installer checks the Panel's Composer PHP requirement before updates.
+Composer's caret constraint `^8.2` accepts PHP versions from 8.2 up to (but not
+including) 9.0, so the Panel's current `^8.2 || ^8.3` requirement permits PHP
+8.5. The installer now selects PHP 8.5 for fresh installs and migrates existing
+Panel installs to that branch during Panel updates and option `[22]`.
 
-PHP 8.5.12 is the newest PHP release overall, but the current Panel's upstream
-Composer requirement is `^8.2 || ^8.3`, which excludes PHP 8.5. The installer
-therefore selects the newest compatible branch (PHP 8.3) for fresh installs and
-fresh reinstalls, and preserves an existing Panel's configured branch while
-upgrading it to the latest available security-patched release.
+PHP 8.5.12 is the minimum accepted patch level. APT-managed PHP is installed or
+upgraded from the configured OS repositories; Ubuntu 26.04 can build PHP 8.5
+from the verified php.net release archive if a native package is unavailable.
+The installer updates the Panel's Nginx socket, queue worker, and cron command
+when migrating the runtime. Composer's declared range permits PHP 8.5; this
+does not imply that every Panel dependency has been independently tested by
+upstream on every PHP 8.5 release.
 
 ### Ubuntu 26.04
 
-Ubuntu 26.04 may provide a newer native PHP version than the Panel compatibility target. The installer therefore does **not** blindly select the newest PHP package.
-
-It attempts to use a compatible PHP 8.3/8.2 runtime and provides a PHP 8.3 compatibility fallback when required.
+Ubuntu 26.04 may provide PHP 8.5 in its native repositories. If PHP 8.5 is
+unavailable there, the installer builds the current PHP 8.5 release from
+php.net with checksum verification rather than mixing package repositories.
 
 ---
 
@@ -300,9 +301,9 @@ service status in the systemd journal. Check it with
 `systemctl status wings --no-pager`.
 
 Panel and Wings downloads use GitHub's latest stable release URLs; Docker's
-official install script is fetched at install time, PHP uses the selected
-supported branch (and the current stable 8.3 release for the source-build
-fallback), and OS packages come from the configured APT repositories.
+official install script is fetched at install time, PHP uses the current 8.5
+release (from APT or a checksum-verified source build), and OS packages come
+from the configured APT repositories.
 
 ---
 
