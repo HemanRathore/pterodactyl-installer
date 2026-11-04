@@ -1192,25 +1192,103 @@ install_panel_menu() {
 #   SHARED WINGS INSTALL
 # ═══════════════════════════════════════════════════════════════
 _do_install_wings() {
+    local WINGS_DOMAIN WINGS_EMAIL CERTBOT_RC NGINX_WAS_ACTIVE=false
+
+    ask "Node FQDN for automatic Wings SSL (blank to skip):"; read -r WINGS_DOMAIN
+    if [ -n "$WINGS_DOMAIN" ]; then
+        if [[ ! "$WINGS_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] ||
+            [[ "$WINGS_DOMAIN" != *.* ]] || [[ "$WINGS_DOMAIN" == *..* ]]; then
+            err "Enter a valid node hostname such as node1.example.com."
+            return 1
+        fi
+        WINGS_DOMAIN=$(printf '%s' "$WINGS_DOMAIN" | tr '[:upper:]' '[:lower:]')
+        ask "Email for Let's Encrypt certificate notices:"; read -r WINGS_EMAIL
+        if [[ -z "$WINGS_EMAIL" || "$WINGS_EMAIL" != *@* ]]; then
+            err "A valid email address is required for certificate issuance."
+            return 1
+        fi
+
+        step "Wings TLS Certificate"
+        info "The node hostname must resolve to this server and inbound port 80 must be reachable."
+        if ! command -v certbot >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get update ||
+                { err "APT update failed; cannot install Certbot."; return 1; }
+            DEBIAN_FRONTEND=noninteractive apt-get install -y certbot ||
+                { err "Certbot installation failed."; return 1; }
+        fi
+
+        if systemctl is-active --quiet nginx; then
+            systemctl stop nginx ||
+                { err "Could not stop Nginx temporarily for the standalone challenge."; return 1; }
+            NGINX_WAS_ACTIVE=true
+        fi
+
+        CERTBOT_RC=0
+        if [ "$NGINX_WAS_ACTIVE" = true ]; then
+            certbot certonly --standalone -d "$WINGS_DOMAIN" --email "$WINGS_EMAIL" \
+                --agree-tos --no-eff-email --non-interactive \
+                --pre-hook "systemctl stop nginx" --post-hook "systemctl start nginx" ||
+                CERTBOT_RC=$?
+        else
+            certbot certonly --standalone -d "$WINGS_DOMAIN" --email "$WINGS_EMAIL" \
+                --agree-tos --no-eff-email --non-interactive ||
+                CERTBOT_RC=$?
+        fi
+
+        if [ "$NGINX_WAS_ACTIVE" = true ] && ! systemctl start nginx; then
+            err "Certificate request finished, but Nginx could not be restarted."
+            return 1
+        fi
+        if [ "$CERTBOT_RC" -ne 0 ] ||
+            [ ! -s "/etc/letsencrypt/live/${WINGS_DOMAIN}/fullchain.pem" ] ||
+            [ ! -s "/etc/letsencrypt/live/${WINGS_DOMAIN}/privkey.pem" ]; then
+            err "Could not obtain a usable TLS certificate for ${WINGS_DOMAIN}."
+            err "Check DNS, inbound port 80, and Certbot output, then retry Wings installation."
+            return 1
+        fi
+        ok "Wings TLS certificate ready for ${WINGS_DOMAIN}."
+    else
+        warn "Skipping automatic SSL; enable TLS only if certificates already exist for the node FQDN."
+    fi
+
     step "Docker"
     if ! command -v docker &>/dev/null; then
         info "Installing Docker..."
-        curl -fsSL https://get.docker.com | bash &>/dev/null
+        local DOCKER_INSTALLER="/tmp/get-docker-$$.sh"
+        if ! curl -fsSL --retry 3 --retry-all-errors -o "$DOCKER_INSTALLER" https://get.docker.com ||
+            ! bash "$DOCKER_INSTALLER"; then
+            rm -f "$DOCKER_INSTALLER"
+            err "Docker installation failed."
+            return 1
+        fi
+        rm -f "$DOCKER_INSTALLER"
         ok "Docker installed"
     else
         ok "Docker already present"
     fi
-    systemctl enable --now docker &>/dev/null
+    systemctl enable --now docker || { err "Docker service could not be started."; return 1; }
 
     step "Wings Binary"
-    local ARCH
+    local ARCH WINGS_TMP
     ARCH=$(dpkg --print-architecture 2>/dev/null \
         || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
     mkdir -p /etc/pterodactyl
+    WINGS_TMP="/usr/local/bin/wings.download.$$"
     info "Downloading Wings (${ARCH})..."
-    curl -fsSL -o /usr/local/bin/wings \
+    if ! curl -fsSL --retry 3 --retry-all-errors -o "$WINGS_TMP" \
         "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${ARCH}"
-    chmod u+x /usr/local/bin/wings
+    then
+        rm -f "$WINGS_TMP"
+        err "Wings download failed."
+        return 1
+    fi
+    chmod 755 "$WINGS_TMP"
+    if ! "$WINGS_TMP" --version >/dev/null 2>&1 ||
+        ! mv -f "$WINGS_TMP" /usr/local/bin/wings; then
+        rm -f "$WINGS_TMP"
+        err "Downloaded Wings binary failed validation."
+        return 1
+    fi
     ok "Wings: $(/usr/local/bin/wings --version 2>/dev/null || echo 'installed')"
 
     step "Wings Systemd Service"
@@ -1236,9 +1314,45 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 WINGSEOF
+
+    cat > /etc/systemd/system/wings-configured.service << 'WINGSCONFIGEOF'
+[Unit]
+Description=Restart Wings after its auto-deploy configuration changes
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart wings
+ExecStartPost=/bin/systemctl --no-pager --full status wings
+WINGSCONFIGEOF
+
+    cat > /etc/systemd/system/wings-configured.path << 'WINGSPATHEOF'
+[Unit]
+Description=Watch for Wings auto-deploy configuration
+
+[Path]
+PathExists=/etc/pterodactyl/config.yml
+PathChanged=/etc/pterodactyl/config.yml
+Unit=wings-configured.service
+
+[Install]
+WantedBy=multi-user.target
+WINGSPATHEOF
+
     systemctl daemon-reload
-    systemctl enable wings &>/dev/null
-    ok "Wings service registered (start after 'wings configure ...')"
+    systemctl enable wings-configured.path || {
+        err "Could not enable the Wings configuration watcher."
+        return 1
+    }
+    systemctl start wings-configured.path || {
+        err "Could not start the Wings configuration watcher."
+        return 1
+    }
+    systemctl enable wings &>/dev/null || {
+        err "Could not enable the Wings service."
+        return 1
+    }
+    ok "Wings service is ready; it will restart automatically when auto-deploy writes config.yml."
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1248,7 +1362,7 @@ install_wings() {
     show_banner
     echo -e "${BOLD}${GREEN}  🔧 INSTALL PTERODACTYL WINGS${RESET}"
     sep; require_root; detect_os
-    _do_install_wings
+    _do_install_wings || { pause; return 1; }
     local WINGS_IP; WINGS_IP=$(hostname -I | awk '{print $1}')
     sep; ok "Wings installation complete!"
     echo ""
@@ -1264,7 +1378,8 @@ install_wings() {
     echo -e "${BOLD}${WHITE}  ║     wings configure \\                               ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║       --panel-url=https://your.panel \\              ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║       --token=<TOKEN> --node=<ID>                   ║${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  4. systemctl start wings                            ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  4. Wings restarts automatically after config is saved║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║     Check with: systemctl status wings --no-pager     ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ★  moradosolution — https://moradosolution.com                ║${RESET}"
     echo -e "${BOLD}${CYAN}  ╚══════════════════════════════════════════════════════╝${RESET}"
     pause
@@ -1310,7 +1425,11 @@ install_combined() {
     fi
 
     echo ""; info "════ PHASE 2 / 2 — Installing Wings ════"
-    _do_install_wings
+    _do_install_wings || {
+        err "Wings installation failed."
+        pause
+        return 1
+    }
 
     sep; ok "Combined install complete!"
     _print_panel_summary "$P_DOMAIN" "$P_ADMIN_USER" "$COMBO_MODE"
@@ -1384,9 +1503,14 @@ uninstall_wings() {
     show_banner; echo -e "${BOLD}${RED}  🗑️  UNINSTALL WINGS${RESET}"; sep; require_root
     warn "Permanently removes Wings binary, config, service."
     ask "Type CONFIRM:"; read -r C; [[ "$C" != "CONFIRM" ]] && { info "Aborted."; pause; return; }
+    systemctl stop wings-configured.path wings-configured.service 2>/dev/null
+    systemctl disable wings-configured.path 2>/dev/null
     systemctl stop wings 2>/dev/null; systemctl disable wings 2>/dev/null
     rm -f /usr/local/bin/wings; rm -rf /etc/pterodactyl
-    rm -f /etc/systemd/system/wings.service; systemctl daemon-reload
+    rm -f /etc/systemd/system/wings.service \
+        /etc/systemd/system/wings-configured.path \
+        /etc/systemd/system/wings-configured.service
+    systemctl daemon-reload
     ok "Wings removed"
     ask "Also remove Docker? [y/n]:"; read -r RD
     [[ "$RD" =~ ^[Yy]$ ]] && {
@@ -1470,9 +1594,16 @@ uninstall_everything() {
     # ═══════════════════════════════════════════════════════════
     step "[ 3/12 ] Removing Pterodactyl Wings"
     # ═══════════════════════════════════════════════════════════
+    systemctl stop wings-configured.path wings-configured.service 2>/dev/null || true
+    systemctl disable wings-configured.path 2>/dev/null || true
+    systemctl stop wings 2>/dev/null || true
+    systemctl disable wings 2>/dev/null || true
     rm -f /usr/local/bin/wings
     rm -rf /etc/pterodactyl
-    rm -f /etc/systemd/system/wings.service
+    rm -f /etc/systemd/system/wings.service \
+        /etc/systemd/system/wings-configured.path \
+        /etc/systemd/system/wings-configured.service
+    systemctl daemon-reload
     ok "Wings removed"
 
     # ═══════════════════════════════════════════════════════════

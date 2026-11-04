@@ -44,7 +44,7 @@ The launcher downloads the latest MoradoSolution installer and starts the manage
 | Option | Description |
 |--------|-------------|
 | `[1]` Install Panel | Nginx + Let's Encrypt SSL, Cloudflare Tunnel, or HTTP only |
-| `[2]` Install Wings | Docker + Wings daemon + automatic systemd service |
+| `[2]` Install Wings | Docker + latest Wings + optional automatic Let's Encrypt TLS |
 | `[3]` Install Combined | Panel + Wings on the same server |
 
 ## 🗑️ Uninstallation
@@ -279,6 +279,23 @@ Select:
 ### Cloudflare Tunnel
 
 Cloudflare Tunnel can be used when direct public exposure of ports `80/443` is not desired.
+
+### Wings node TLS
+
+During Wings installation, enter the node's public FQDN and an email to request a
+Let's Encrypt certificate automatically, or leave the hostname blank to skip it.
+The hostname must resolve to the node and inbound TCP port 80 must be reachable;
+Nginx is stopped briefly if it is active so Certbot's standalone HTTP challenge
+can bind that port. Use the same FQDN in the Panel's node settings. After running
+the Panel's `wings configure` auto-deploy command, the installer watches for
+`/etc/pterodactyl/config.yml`, restarts Wings automatically, and records the
+service status in the systemd journal. Check it with
+`systemctl status wings --no-pager`.
+
+Panel and Wings downloads use GitHub's latest stable release URLs; Docker's
+official install script is fetched at install time, PHP uses the selected
+supported branch (and the current stable 8.3 release for the source-build
+fallback), and OS packages come from the configured APT repositories.
 
 ---
 
