@@ -69,12 +69,11 @@ nginx_available() { command -v nginx &>/dev/null; }
 # ═══════════════════════════════════════════════════════════════
 #   PHP RUNTIME COMPATIBILITY LAYER
 #
-#   Current Panel releases require PHP ^8.2 || ^8.3. PHP 8.4/8.5
-#   may be newer upstream but are not compatible with this Panel.
+#   Current Panel releases declare PHP ^8.2 || ^8.3. Composer's caret
+#   constraints allow later PHP 8.x minors, including PHP 8.5.
 #
-#   Native packages are preferred. Ubuntu 26.04 has no supported
-#   PHP 8.3 package in its native repositories, so the installer
-#   builds the current PHP 8.3 security release from source.
+#   Native packages are preferred. PHP 8.5.12 is the minimum accepted
+#   security release for the PHP 8.5 branch.
 # ═══════════════════════════════════════════════════════════════
 
 PHP_VER="${PHP_VER:-}"
@@ -111,7 +110,7 @@ php_cmd() {
         _load_php_runtime
     fi
     if [ -z "${PHP_BIN}" ]; then
-        for _v in 8.3 8.2; do
+        for _v in 8.5 8.3 8.2; do
             if [ -x "/usr/bin/php${_v}" ]; then
                 _php_set_package_runtime "${_v}"
                 break
@@ -128,7 +127,7 @@ php_cmd() {
 
 _php_version_ok() {
     case "$1" in
-        8.2|8.3) return 0 ;;
+        8.2|8.3|8.5) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -169,7 +168,7 @@ _php_prepare_repositories() {
                 ;;
             resolute)
                 warn "Ubuntu ${CODENAME} is newer than the supported Ondrej PPA target."
-                warn "The installer will use a supported PHP 8.3 source build instead."
+                warn "The installer will use a PHP 8.5 source build instead."
                 return 1
                 ;;
             *)
@@ -216,16 +215,15 @@ _php_prepare_repositories() {
     DEBIAN_FRONTEND=noninteractive apt-get update -y &>/dev/null
 }
 
-_install_php83_from_source() {
-    step "PHP 8.3 Source Build"
-    local PREFIX="/opt/php83"
-    local BUILD_DIR="/usr/local/src/moradosolution-php83"
-    local RELEASE_JSON="/tmp/moradosolution-php83-release.json"
+_install_php85_from_source() {
+    step "PHP 8.5 Source Build"
+    local PREFIX="/opt/php85"
+    local BUILD_DIR="/usr/local/src/moradosolution-php85"
+    local RELEASE_JSON="/tmp/moradosolution-php85-release.json"
     local PHP_SOURCE_VERSION PHP_TARBALL PHP_SHA256
     local JOBS PHP_BACKUP=""
 
-    info "Ubuntu 26.04 does not provide the PHP version supported by current Pterodactyl."
-    info "Building the latest stable PHP 8.3 release from php.net instead."
+    info "Building the latest stable PHP 8.5 release from php.net."
 
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         build-essential autoconf bison re2c pkg-config \
@@ -235,13 +233,13 @@ _install_php83_from_source() {
         libargon2-dev libsodium-dev libbz2-dev libtidy-dev \
         libpq-dev libedit-dev curl ca-certificates \
         &>/dev/null || {
-        err "Failed to install PHP 8.3 build dependencies."
+        err "Failed to install PHP 8.5 build dependencies."
         return 1
     }
 
-    curl -fsSL 'https://www.php.net/releases/index.php?json&version=8.3' \
+    curl -fsSL 'https://www.php.net/releases/index.php?json&version=8.5' \
         -o "$RELEASE_JSON" || {
-        err "Unable to query php.net for the latest PHP 8.3 release."
+        err "Unable to query php.net for the latest PHP 8.5 release."
         return 1
     }
 
@@ -250,7 +248,7 @@ _install_php83_from_source() {
     PHP_SHA256=$(sed -n 's/.*"filename":"[^"]*\.tar\.gz","name":"[^"]*","sha256":"\([^"]*\)".*/\1/p' "$RELEASE_JSON" | head -1)
 
     [ -n "$PHP_SOURCE_VERSION" ] && [ -n "$PHP_TARBALL" ] && [ -n "$PHP_SHA256" ] || {
-        err "Could not determine the current PHP 8.3 source release and checksum."
+        err "Could not determine the current PHP 8.5 source release and checksum."
         return 1
     }
 
@@ -319,40 +317,40 @@ _install_php83_from_source() {
         --with-gettext \
         --with-xsl \
         --enable-soap \
-        &>/tmp/moradosolution-php83-configure.log || {
-        err "PHP 8.3 configure failed."
-        tail -40 /tmp/moradosolution-php83-configure.log
+        &>/tmp/moradosolution-php85-configure.log || {
+        err "PHP 8.5 configure failed."
+        tail -40 /tmp/moradosolution-php85-configure.log
         return 1
     }
 
-    info "Compiling PHP 8.3 using ${JOBS} CPU threads..."
-    make -j"$JOBS" &>/tmp/moradosolution-php83-build.log || {
-        err "PHP 8.3 compilation failed."
-        tail -60 /tmp/moradosolution-php83-build.log
+    info "Compiling PHP 8.5 using ${JOBS} CPU threads..."
+    make -j"$JOBS" &>/tmp/moradosolution-php85-build.log || {
+        err "PHP 8.5 compilation failed."
+        tail -60 /tmp/moradosolution-php85-build.log
         return 1
     }
 
     if [ "${1:-}" = "refresh" ]; then
         mkdir -p /var/backups/moradosolution || return 1
         chmod 700 /var/backups/moradosolution || return 1
-        PHP_BACKUP="/var/backups/moradosolution/php83-$(date +%Y%m%d%H%M%S).tar.gz"
-        tar -czpf "$PHP_BACKUP" -C /opt php83 || {
+        PHP_BACKUP="/var/backups/moradosolution/php85-$(date +%Y%m%d%H%M%S).tar.gz"
+        tar -czpf "$PHP_BACKUP" -C /opt php85 || {
             err "Could not back up source-built PHP before updating."
             return 1
         }
         chmod 600 "$PHP_BACKUP"
-        systemctl stop php8.3-fpm || {
+        systemctl stop php8.5-fpm || {
             err "Could not stop PHP-FPM for its source update."
             return 1
         }
     fi
 
-    if ! make install &>/tmp/moradosolution-php83-install.log; then
-        err "PHP 8.3 installation failed."
-        tail -40 /tmp/moradosolution-php83-install.log
+    if ! make install &>/tmp/moradosolution-php85-install.log; then
+        err "PHP 8.5 installation failed."
+        tail -40 /tmp/moradosolution-php85-install.log
         if [ -n "$PHP_BACKUP" ]; then
-            tar -xzpf "$PHP_BACKUP" -C / || err "PHP backup restore failed: ${PHP_BACKUP}"
-            systemctl start php8.3-fpm || err "PHP-FPM could not be restarted after rollback."
+            tar -xzpf "$PHP_BACKUP" -C /opt || err "PHP backup restore failed: ${PHP_BACKUP}"
+            systemctl start php8.5-fpm || err "PHP-FPM could not be restarted after rollback."
         fi
         return 1
     fi
@@ -365,8 +363,8 @@ _install_php83_from_source() {
     if [ ! -f "$PREFIX/etc/fpm/php-fpm.conf" ]; then
         cat > "$PREFIX/etc/fpm/php-fpm.conf" <<FPMCONF
 [global]
-pid = /run/php/php8.3-fpm.pid
-error_log = /var/log/php8.3-fpm.log
+pid = /run/php/php8.5-fpm.pid
+error_log = /var/log/php8.5-fpm.log
 daemonize = no
 include = ${PREFIX}/etc/fpm/pool.d/*.conf
 FPMCONF
@@ -378,7 +376,7 @@ FPMCONF
 [www]
 user = www-data
 group = www-data
-listen = /run/php/php8.3-fpm.sock
+listen = /run/php/php8.5-fpm.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -390,15 +388,15 @@ pm.max_spare_servers = 5
 FPMPOOL
     fi
 
-    ln -sf "$PREFIX/bin/php" /usr/bin/php8.3
-    ln -sf "$PREFIX/bin/php-config" /usr/bin/php-config8.3
-    ln -sf "$PREFIX/bin/phpize" /usr/bin/phpize8.3
-    ln -sf "$PREFIX/sbin/php-fpm" /usr/sbin/php-fpm8.3
+    ln -sf "$PREFIX/bin/php" /usr/bin/php8.5
+    ln -sf "$PREFIX/bin/php-config" /usr/bin/php-config8.5
+    ln -sf "$PREFIX/bin/phpize" /usr/bin/phpize8.5
+    ln -sf "$PREFIX/sbin/php-fpm" /usr/sbin/php-fpm8.5
 
-    if [ ! -f /etc/systemd/system/php8.3-fpm.service ]; then
-        cat > /etc/systemd/system/php8.3-fpm.service <<FPMUNIT
+    if [ ! -f /etc/systemd/system/php8.5-fpm.service ]; then
+        cat > /etc/systemd/system/php8.5-fpm.service <<FPMUNIT
 [Unit]
-Description=The PHP 8.3 FastCGI Process Manager (MoradoSolution source build)
+Description=The PHP 8.5 FastCGI Process Manager (MoradoSolution source build)
 After=network.target
 Documentation=https://www.php.net/manual/en/install.fpm.php
 
@@ -406,7 +404,7 @@ Documentation=https://www.php.net/manual/en/install.fpm.php
 Type=simple
 Environment="PHPRC=${PREFIX}/etc/fpm/php.ini"
 Environment="PHP_INI_SCAN_DIR=${PREFIX}/etc/fpm/conf.d"
-ExecStart=/usr/sbin/php-fpm8.3 --nodaemonize --fpm-config ${PREFIX}/etc/fpm/php-fpm.conf
+ExecStart=/usr/sbin/php-fpm8.5 --nodaemonize --fpm-config ${PREFIX}/etc/fpm/php-fpm.conf
 ExecReload=/bin/kill -USR2 \$MAINPID
 Restart=on-failure
 PrivateTmp=true
@@ -417,33 +415,33 @@ FPMUNIT
     fi
 
     systemctl daemon-reload
-    systemctl enable php8.3-fpm &>/dev/null
-    if ! systemctl restart php8.3-fpm &>/dev/null; then
+    systemctl enable php8.5-fpm &>/dev/null
+    if ! systemctl restart php8.5-fpm &>/dev/null; then
         err "Updated PHP-FPM failed to restart."
         if [ -n "$PHP_BACKUP" ]; then
-            systemctl stop php8.3-fpm 2>/dev/null || true
-            tar -xzpf "$PHP_BACKUP" -C / || err "PHP backup restore failed: ${PHP_BACKUP}"
+            systemctl stop php8.5-fpm 2>/dev/null || true
+            tar -xzpf "$PHP_BACKUP" -C /opt || err "PHP backup restore failed: ${PHP_BACKUP}"
             systemctl daemon-reload
-            systemctl start php8.3-fpm || err "PHP-FPM could not be restarted after rollback."
+            systemctl start php8.5-fpm || err "PHP-FPM could not be restarted after rollback."
         fi
         return 1
     fi
 
-    PHP_VER="8.3"
-    PHP_BIN="/usr/bin/php8.3"
-    PHP_FPM_SERVICE="php8.3-fpm"
-    PHP_FPM_SOCK="/run/php/php8.3-fpm.sock"
+    PHP_VER="8.5"
+    PHP_BIN="/usr/bin/php8.5"
+    PHP_FPM_SERVICE="php8.5-fpm"
+    PHP_FPM_SOCK="/run/php/php8.5-fpm.sock"
     PHP_CONFIG_DIR="$PREFIX/etc"
     PHP_SOURCE_BUILD="true"
 
     if ! "$PHP_BIN" -v &>/dev/null || ! systemctl is-active --quiet "$PHP_FPM_SERVICE"; then
-        err "Source-built PHP 8.3 failed to start."
+        err "Source-built PHP 8.5 failed to start."
         journalctl -u "$PHP_FPM_SERVICE" --no-pager -n 30 2>/dev/null || true
         if [ -n "$PHP_BACKUP" ]; then
-            systemctl stop php8.3-fpm 2>/dev/null || true
-            tar -xzpf "$PHP_BACKUP" -C / || err "PHP backup restore failed: ${PHP_BACKUP}"
+            systemctl stop php8.5-fpm 2>/dev/null || true
+            tar -xzpf "$PHP_BACKUP" -C /opt || err "PHP backup restore failed: ${PHP_BACKUP}"
             systemctl daemon-reload
-            systemctl start php8.3-fpm || err "PHP-FPM could not be restarted after rollback."
+            systemctl start php8.5-fpm || err "PHP-FPM could not be restarted after rollback."
         fi
         return 1
     fi
@@ -455,7 +453,7 @@ FPMUNIT
     return 0
 }
 
-# Prepare a PHP runtime that is explicitly supported by current Pterodactyl.
+# Prepare the newest Panel-compatible PHP runtime.
 
 _panel_php_constraint_check() {
     local CONSTRAINT="$1"
@@ -464,19 +462,31 @@ _panel_php_constraint_check() {
         return 0
     }
 
-    local CURRENT="${PHP_VER}"
-    # Current Pterodactyl releases use constraints such as ^8.2 || ^8.3.
-    # Extract explicit 8.x minor versions from the composer constraint.
-    local SUPPORTED=""
-    SUPPORTED=$(printf '%s\n' "$CONSTRAINT" | grep -oE '8\.[0-9]+' | sort -u | tr '\n' ' ')
+    local CURRENT_MAJOR CURRENT_MINOR REQUIRED_MAJOR REQUIRED_MINOR
+    CURRENT_MAJOR="${PHP_VER%%.*}"
+    CURRENT_MINOR="${PHP_VER#*.}"
+    local COMPATIBLE=false TOKEN
+    # Composer's ^8.2 constraint means >=8.2 and <9.0, not just 8.2/8.3.
+    while IFS= read -r TOKEN; do
+        REQUIRED_MAJOR="${TOKEN#^}"
+        REQUIRED_MAJOR="${REQUIRED_MAJOR%%.*}"
+        REQUIRED_MINOR="${TOKEN#*.}"
+        if [ "$CURRENT_MAJOR" = "$REQUIRED_MAJOR" ] &&
+           [ "$CURRENT_MINOR" -ge "$REQUIRED_MINOR" ]; then
+            COMPATIBLE=true
+            break
+        fi
+    done <<EOF
+$(printf '%s\n' "$CONSTRAINT" | grep -oE '\^[0-9]+\.[0-9]+' || true)
+EOF
 
-    if [ -n "$SUPPORTED" ] && ! printf ' %s ' "$SUPPORTED" | grep -q " ${CURRENT} "; then
+    if [ "$COMPATIBLE" != "true" ]; then
         err "Panel requires PHP constraint: ${CONSTRAINT}"
-        err "Selected PHP runtime is ${CURRENT}, which is outside that constraint."
+        err "Selected PHP runtime is ${PHP_VER}, which is outside that constraint."
         return 1
     fi
 
-    ok "Panel PHP requirement: ${CONSTRAINT} | selected: PHP ${CURRENT}"
+    ok "Panel PHP requirement: ${CONSTRAINT} | selected: PHP ${PHP_VER}"
     return 0
 }
 
@@ -485,12 +495,12 @@ _prepare_php_runtime() {
 
     _load_php_runtime
 
-    # Keep an installed Panel on its configured PHP branch. A clean install
-    # prefers PHP 8.3, the newest branch currently supported by the Panel.
+    # Prefer the newest PHP branch accepted by the Panel, including upgrades
+    # from an older configured branch.
     if [ -n "$PHP_VER" ] && _php_version_ok "$PHP_VER" && \
+       [ "$PHP_VER" = "8.5" ] && \
        [ -x "$PHP_BIN" ] && [ -n "$PHP_FPM_SERVICE" ]; then
-        if { [ -d /var/www/pterodactyl ] || [ "$PHP_VER" = "8.3" ]; } &&
-           { systemctl list-unit-files "$PHP_FPM_SERVICE.service" &>/dev/null 2>&1 || \
+        if { systemctl list-unit-files "$PHP_FPM_SERVICE.service" &>/dev/null 2>&1 || \
              [ "$PHP_SOURCE_BUILD" = "true" ]; }; then
             ok "Using configured PHP ${PHP_VER}: ${PHP_BIN}"
             return 0
@@ -510,19 +520,12 @@ _prepare_php_runtime() {
             ;;
     esac
 
-    # Prefer the newest minor accepted by the current Panel. PHP 8.5.12 is
-    # newer upstream, but Panel's Composer constraint currently excludes it.
     local V PHP_CANDIDATES
-    if [ -d /var/www/pterodactyl ] && _php_version_ok "$PHP_VER"; then
-        PHP_CANDIDATES="$PHP_VER"
-    else
-        PHP_CANDIDATES="8.3 8.2"
-    fi
+    PHP_CANDIDATES="8.5"
     for V in $PHP_CANDIDATES; do
         if _php_pkg_available "$V"; then
             _php_set_package_runtime "$V"
             ok "PHP ${V} packages available in native APT repositories."
-            _save_php_runtime
             return 0
         fi
     done
@@ -533,30 +536,117 @@ _prepare_php_runtime() {
             if _php_pkg_available "$V"; then
                 _php_set_package_runtime "$V"
                 ok "PHP ${V} packages available after repository setup."
-                _save_php_runtime
                 return 0
             fi
         done
     fi
 
-    # Ubuntu 26.04 currently has native PHP 8.5, while current Pterodactyl
-    # does not accept PHP 8.5. Build PHP 8.3 instead of mixing Ubuntu releases.
-    if [[ ! -d /var/www/pterodactyl && "$DISTRO" == "ubuntu" && "$CODENAME" == "resolute" ]]; then
-        _install_php83_from_source
+    # Avoid mixing Ubuntu releases or silently downgrading PHP branches when
+    # no trusted PHP 8.5 package is available.
+    if [[ "$DISTRO" == "ubuntu" && "$CODENAME" == "resolute" ]]; then
+        _install_php85_from_source
         return $?
     fi
 
-    err "No supported PHP package is available for ${DISTRO} ${CODENAME}."
-    if [ -d /var/www/pterodactyl ]; then
-        err "Could not preserve the Panel's configured PHP ${PHP_VER} branch; refusing an automatic runtime migration."
-    fi
-    err "The installer will not silently use an unsupported PHP release."
+    err "No PHP 8.5 package is available for ${DISTRO} ${CODENAME}."
+    err "The installer will not silently fall back to an older PHP branch."
     return 1
 }
 
 _add_php_repo() {
     # Compatibility wrapper retained for existing callers.
     _prepare_php_runtime
+}
+
+_switch_panel_php_runtime() {
+    local stamp backup nginx_conf queue_unit cron_backup cron_tmp
+    stamp=$(date +%Y%m%d%H%M%S)
+    backup="/var/backups/pterodactyl/php-runtime-${stamp}"
+    nginx_conf="/etc/nginx/sites-available/pterodactyl.conf"
+
+    if command -v nginx >/dev/null 2>&1 && [ ! -f "$nginx_conf" ]; then
+        err "Could not find the managed Panel Nginx config; refusing an unsafe PHP runtime switch."
+        return 1
+    fi
+    if [ -f "$nginx_conf" ] && grep -q 'fastcgi_pass' "$nginx_conf" &&
+       ! grep -Fq "$PHP_FPM_SOCK" "$nginx_conf" &&
+       ! grep -qE 'fastcgi_pass[[:space:]]+unix:/run/php/php[0-9]+\.[0-9]+-fpm\.sock;' "$nginx_conf"; then
+        err "Panel Nginx config uses a custom PHP-FPM socket; refusing an unsafe runtime switch."
+        return 1
+    fi
+    queue_unit="/etc/systemd/system/pteroq.service"
+    if [ -f "$queue_unit" ] && grep -q '/var/www/pterodactyl/artisan queue:work' "$queue_unit" &&
+       ! grep -Fq "$PHP_BIN /var/www/pterodactyl/artisan queue:work" "$queue_unit" &&
+       ! grep -qE '^ExecStart=[^[:space:]]+[[:space:]]+/var/www/pterodactyl/artisan queue:work' "$queue_unit"; then
+        err "Pterodactyl queue service uses a custom PHP command; refusing an unsafe runtime switch."
+        return 1
+    fi
+
+    mkdir -p "$backup" || return 1
+    chmod 700 /var/backups/pterodactyl "$backup" || return 1
+
+    if [ -f "$nginx_conf" ] && grep -q 'fastcgi_pass' "$nginx_conf" &&
+       ! grep -Fq "$PHP_FPM_SOCK" "$nginx_conf"; then
+        cp -p "$nginx_conf" "$backup/pterodactyl.conf" || return 1
+        sed -i -E \
+            "s|^( *fastcgi_pass[[:space:]]+unix:)/run/php/php[0-9]+\.[0-9]+-fpm\.sock;|\1${PHP_FPM_SOCK};|" \
+            "$nginx_conf" || return 1
+        if ! grep -Fq "$PHP_FPM_SOCK" "$nginx_conf" ||
+           { command -v nginx >/dev/null 2>&1 && { ! nginx -t || ! systemctl reload nginx; }; }; then
+            cp -p "$backup/pterodactyl.conf" "$nginx_conf"
+            if command -v nginx >/dev/null 2>&1; then
+                nginx -t && systemctl reload nginx || true
+            fi
+            err "Could not switch Nginx to PHP ${PHP_VER}; restored its previous configuration."
+            return 1
+        fi
+    fi
+
+    if [ -f "$queue_unit" ] && grep -q '/var/www/pterodactyl/artisan queue:work' "$queue_unit" &&
+       ! grep -Fq "$PHP_BIN /var/www/pterodactyl/artisan queue:work" "$queue_unit"; then
+        cp -p "$queue_unit" "$backup/pteroq.service" || return 1
+        sed -i -E \
+            "s|^(ExecStart=)[^[:space:]]+([[:space:]]+/var/www/pterodactyl/artisan queue:work.*)|\1${PHP_BIN}\2|" \
+            "$queue_unit" || return 1
+        if ! grep -Fq "$PHP_BIN /var/www/pterodactyl/artisan queue:work" "$queue_unit"; then
+            err "Could not switch the Pterodactyl queue service to PHP ${PHP_VER}."
+            return 1
+        fi
+        systemctl daemon-reload || {
+            cp -p "$backup/pteroq.service" "$queue_unit"
+            systemctl daemon-reload || true
+            return 1
+        }
+    fi
+
+    if command -v crontab >/dev/null 2>&1 &&
+       crontab -l 2>/dev/null | grep -qE '^\* \* \* \* \* [^ ]+ /var/www/pterodactyl/artisan schedule:run'; then
+        cron_backup="$backup/root.crontab"
+        cron_tmp=$(mktemp) || return 1
+        crontab -l > "$cron_backup" || { rm -f "$cron_tmp"; return 1; }
+        chmod 600 "$cron_backup"
+        sed -E \
+            "s|^(\* \* \* \* \* )[[:graph:]]+ /var/www/pterodactyl/artisan schedule:run|\1${PHP_BIN} /var/www/pterodactyl/artisan schedule:run|" \
+            "$cron_backup" > "$cron_tmp" || { rm -f "$cron_tmp"; return 1; }
+        if ! cmp -s "$cron_backup" "$cron_tmp"; then
+            if ! grep -Fq "$PHP_BIN /var/www/pterodactyl/artisan schedule:run" "$cron_tmp" ||
+               ! crontab "$cron_tmp"; then
+                crontab "$cron_backup" || true
+                rm -f "$cron_tmp"
+                err "Could not switch the Panel scheduler to PHP ${PHP_VER}."
+                return 1
+            fi
+        fi
+        rm -f "$cron_tmp"
+    fi
+
+    if [ -f "$backup/pterodactyl.conf" ] || [ -f "$backup/pteroq.service" ] ||
+       [ -f "$backup/root.crontab" ]; then
+        info "Previous Panel PHP service configuration backed up at ${backup}"
+    else
+        rmdir "$backup" 2>/dev/null || true
+    fi
+    return 0
 }
 
 _refresh_php_runtime() {
@@ -567,14 +657,28 @@ _refresh_php_runtime() {
     }
 
     if [ "$PHP_SOURCE_BUILD" = "true" ]; then
-        _install_php83_from_source refresh || return 1
+        _install_php85_from_source refresh || return 1
     else
         DEBIAN_FRONTEND=noninteractive apt-get update ||
             { err "APT update failed; cannot refresh PHP ${PHP_VER}."; return 1; }
-        DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y "php${PHP_VER}*" ||
-            { err "Could not upgrade the PHP ${PHP_VER} packages."; return 1; }
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            "php${PHP_VER}" "php${PHP_VER}-common" "php${PHP_VER}-cli" \
+            "php${PHP_VER}-gd" "php${PHP_VER}-mysql" \
+            "php${PHP_VER}-mbstring" "php${PHP_VER}-bcmath" \
+            "php${PHP_VER}-xml" "php${PHP_VER}-fpm" \
+            "php${PHP_VER}-curl" "php${PHP_VER}-zip" "php${PHP_VER}-intl" ||
+            { err "Could not install or upgrade the PHP ${PHP_VER} runtime packages."; return 1; }
     fi
-    verify_php_security_level
+    systemctl enable "$PHP_FPM_SERVICE" || return 1
+    systemctl restart "$PHP_FPM_SERVICE" || return 1
+    verify_php_security_level || return 1
+    if update-alternatives --list php 2>/dev/null | grep -Fxq "$PHP_BIN"; then
+        update-alternatives --set php "$PHP_BIN" || return 1
+    fi
+    if [ -d /var/www/pterodactyl ]; then
+        _switch_panel_php_runtime || return 1
+    fi
+    _save_php_runtime
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -909,9 +1013,9 @@ SQLEOF
     if [[ "$PHP_INSTALLED_VER" < "8.2" ]]; then
         err "PHP version too old: ${PHP_INSTALLED_VER} — Pterodactyl requires >= 8.2"
         err "The 'php' command is pointing to the wrong version."
-        info "Switching default PHP to 8.2..."
+        info "Switching default PHP to ${PHP_VER}..."
         update-alternatives --set php "$PHP_BIN" &>/dev/null || true
-        if command -v php-config8.3 &>/dev/null || [ -x "/usr/bin/php-config${PHP_VER}" ]; then
+        if command -v "php-config${PHP_VER}" &>/dev/null || [ -x "/usr/bin/php-config${PHP_VER}" ]; then
             update-alternatives --set php-config "/usr/bin/php-config${PHP_VER}" &>/dev/null || true
         fi
         PHP_INSTALLED_VER=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;" 2>/dev/null)
@@ -1777,9 +1881,11 @@ uninstall_everything() {
     rm -rf /etc/php
     rm -rf /var/lib/php
     rm -rf /run/php
-    rm -f /usr/bin/php /usr/bin/php8.5 /usr/bin/php8.4 /usr/bin/php8.3 /usr/bin/php8.2 /usr/bin/php8.1 /usr/bin/php8.0 /usr/bin/php7.4 /usr/bin/php-config8.3 /usr/bin/phpize8.3 /usr/sbin/php-fpm8.3
-    rm -rf /opt/php83
-    rm -f /etc/systemd/system/php8.3-fpm.service
+    rm -f /usr/bin/php /usr/bin/php8.5 /usr/bin/php8.4 /usr/bin/php8.3 /usr/bin/php8.2 /usr/bin/php8.1 /usr/bin/php8.0 /usr/bin/php7.4 \
+        /usr/bin/php-config8.5 /usr/bin/phpize8.5 /usr/sbin/php-fpm8.5 \
+        /usr/bin/php-config8.3 /usr/bin/phpize8.3 /usr/sbin/php-fpm8.3
+    rm -rf /opt/php85 /opt/php83
+    rm -f /etc/systemd/system/php8.5-fpm.service /etc/systemd/system/php8.3-fpm.service
     systemctl daemon-reload
 
     # Remove Sury/Ondrej PHP repo
@@ -1903,6 +2009,7 @@ verify_php_security_level() {
     case "$PHP_VER" in
         8.2) minimum_version="8.2.35" ;;
         8.3) minimum_version="8.3.36" ;;
+        8.5) minimum_version="8.5.12" ;;
         *)
             err "PHP ${PHP_VER} is not covered by the current Panel security-release guidance."
             return 1
