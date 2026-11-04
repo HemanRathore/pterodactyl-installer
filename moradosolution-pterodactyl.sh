@@ -69,14 +69,12 @@ nginx_available() { command -v nginx &>/dev/null; }
 # ═══════════════════════════════════════════════════════════════
 #   PHP RUNTIME COMPATIBILITY LAYER
 #
-#   Pterodactyl 1.12+ / current Panel releases support PHP 8.2
-#   and 8.3. PHP 8.4/8.5 from newer distro releases is NOT
-#   selected merely because it is newer; Composer must match the
-#   Panel's supported PHP range.
+#   Current Panel releases require PHP ^8.2 || ^8.3. PHP 8.4/8.5
+#   may be newer upstream but are not compatible with this Panel.
 #
 #   Native packages are preferred. Ubuntu 26.04 has no supported
 #   PHP 8.3 package in its native repositories, so the installer
-#   can build the current PHP 8.3 security release from source.
+#   builds the current PHP 8.3 security release from source.
 # ═══════════════════════════════════════════════════════════════
 
 PHP_VER="${PHP_VER:-}"
@@ -224,7 +222,7 @@ _install_php83_from_source() {
     local BUILD_DIR="/usr/local/src/moradosolution-php83"
     local RELEASE_JSON="/tmp/moradosolution-php83-release.json"
     local PHP_SOURCE_VERSION PHP_TARBALL PHP_SHA256
-    local JOBS
+    local JOBS PHP_BACKUP=""
 
     info "Ubuntu 26.04 does not provide the PHP version supported by current Pterodactyl."
     info "Building the latest stable PHP 8.3 release from php.net instead."
@@ -251,10 +249,20 @@ _install_php83_from_source() {
     PHP_TARBALL=$(sed -n 's/.*"filename":"\([^"]*\.tar\.gz\)".*/\1/p' "$RELEASE_JSON" | head -1)
     PHP_SHA256=$(sed -n 's/.*"filename":"[^"]*\.tar\.gz","name":"[^"]*","sha256":"\([^"]*\)".*/\1/p' "$RELEASE_JSON" | head -1)
 
-    [ -n "$PHP_SOURCE_VERSION" ] && [ -n "$PHP_TARBALL" ] || {
-        err "Could not determine the current PHP 8.3 source release."
+    [ -n "$PHP_SOURCE_VERSION" ] && [ -n "$PHP_TARBALL" ] && [ -n "$PHP_SHA256" ] || {
+        err "Could not determine the current PHP 8.3 source release and checksum."
         return 1
     }
+
+    if [ "${1:-}" = "refresh" ] && [ -x "$PHP_BIN" ]; then
+        local INSTALLED_PHP_VERSION
+        INSTALLED_PHP_VERSION=$("$PHP_BIN" -r 'echo PHP_VERSION;' 2>/dev/null) || return 1
+        if dpkg --compare-versions "$INSTALLED_PHP_VERSION" ge "$PHP_SOURCE_VERSION"; then
+            ok "Source-built PHP ${INSTALLED_PHP_VERSION} is already current (${PHP_SOURCE_VERSION})."
+            rm -f "$RELEASE_JSON"
+            return 0
+        fi
+    fi
 
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR" || return 1
@@ -265,12 +273,10 @@ _install_php83_from_source() {
         return 1
     }
 
-    if [ -n "$PHP_SHA256" ]; then
-        echo "${PHP_SHA256}  ${PHP_TARBALL}" | sha256sum -c - || {
-            err "PHP source SHA-256 verification failed."
-            return 1
-        }
-    fi
+    echo "${PHP_SHA256}  ${PHP_TARBALL}" | sha256sum -c - || {
+        err "PHP source SHA-256 verification failed."
+        return 1
+    }
 
     rm -rf "php-${PHP_SOURCE_VERSION}"
     tar -xzf "$PHP_TARBALL" || return 1
@@ -326,27 +332,49 @@ _install_php83_from_source() {
         return 1
     }
 
-    make install &>/tmp/moradosolution-php83-install.log || {
+    if [ "${1:-}" = "refresh" ]; then
+        mkdir -p /var/backups/moradosolution || return 1
+        chmod 700 /var/backups/moradosolution || return 1
+        PHP_BACKUP="/var/backups/moradosolution/php83-$(date +%Y%m%d%H%M%S).tar.gz"
+        tar -czpf "$PHP_BACKUP" -C /opt php83 || {
+            err "Could not back up source-built PHP before updating."
+            return 1
+        }
+        chmod 600 "$PHP_BACKUP"
+        systemctl stop php8.3-fpm || {
+            err "Could not stop PHP-FPM for its source update."
+            return 1
+        }
+    fi
+
+    if ! make install &>/tmp/moradosolution-php83-install.log; then
         err "PHP 8.3 installation failed."
         tail -40 /tmp/moradosolution-php83-install.log
+        if [ -n "$PHP_BACKUP" ]; then
+            tar -xzpf "$PHP_BACKUP" -C / || err "PHP backup restore failed: ${PHP_BACKUP}"
+            systemctl start php8.3-fpm || err "PHP-FPM could not be restarted after rollback."
+        fi
         return 1
-    }
+    fi
 
     mkdir -p "$PREFIX/etc/cli/conf.d" "$PREFIX/etc/fpm/conf.d" /run/php
 
-    cp php.ini-production "$PREFIX/etc/cli/php.ini"
-    cp php.ini-production "$PREFIX/etc/fpm/php.ini"
+    [ -f "$PREFIX/etc/cli/php.ini" ] || cp php.ini-production "$PREFIX/etc/cli/php.ini"
+    [ -f "$PREFIX/etc/fpm/php.ini" ] || cp php.ini-production "$PREFIX/etc/fpm/php.ini"
 
-    cat > "$PREFIX/etc/fpm/php-fpm.conf" <<FPMCONF
+    if [ ! -f "$PREFIX/etc/fpm/php-fpm.conf" ]; then
+        cat > "$PREFIX/etc/fpm/php-fpm.conf" <<FPMCONF
 [global]
 pid = /run/php/php8.3-fpm.pid
 error_log = /var/log/php8.3-fpm.log
 daemonize = no
 include = ${PREFIX}/etc/fpm/pool.d/*.conf
 FPMCONF
+    fi
 
     mkdir -p "$PREFIX/etc/fpm/pool.d"
-    cat > "$PREFIX/etc/fpm/pool.d/www.conf" <<FPMPOOL
+    if [ ! -f "$PREFIX/etc/fpm/pool.d/www.conf" ]; then
+        cat > "$PREFIX/etc/fpm/pool.d/www.conf" <<FPMPOOL
 [www]
 user = www-data
 group = www-data
@@ -360,13 +388,15 @@ pm.start_servers = 2
 pm.min_spare_servers = 1
 pm.max_spare_servers = 5
 FPMPOOL
+    fi
 
     ln -sf "$PREFIX/bin/php" /usr/bin/php8.3
     ln -sf "$PREFIX/bin/php-config" /usr/bin/php-config8.3
     ln -sf "$PREFIX/bin/phpize" /usr/bin/phpize8.3
     ln -sf "$PREFIX/sbin/php-fpm" /usr/sbin/php-fpm8.3
 
-    cat > /etc/systemd/system/php8.3-fpm.service <<FPMUNIT
+    if [ ! -f /etc/systemd/system/php8.3-fpm.service ]; then
+        cat > /etc/systemd/system/php8.3-fpm.service <<FPMUNIT
 [Unit]
 Description=The PHP 8.3 FastCGI Process Manager (MoradoSolution source build)
 After=network.target
@@ -384,10 +414,20 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 FPMUNIT
+    fi
 
     systemctl daemon-reload
     systemctl enable php8.3-fpm &>/dev/null
-    systemctl restart php8.3-fpm &>/dev/null
+    if ! systemctl restart php8.3-fpm &>/dev/null; then
+        err "Updated PHP-FPM failed to restart."
+        if [ -n "$PHP_BACKUP" ]; then
+            systemctl stop php8.3-fpm 2>/dev/null || true
+            tar -xzpf "$PHP_BACKUP" -C / || err "PHP backup restore failed: ${PHP_BACKUP}"
+            systemctl daemon-reload
+            systemctl start php8.3-fpm || err "PHP-FPM could not be restarted after rollback."
+        fi
+        return 1
+    fi
 
     PHP_VER="8.3"
     PHP_BIN="/usr/bin/php8.3"
@@ -399,10 +439,17 @@ FPMUNIT
     if ! "$PHP_BIN" -v &>/dev/null || ! systemctl is-active --quiet "$PHP_FPM_SERVICE"; then
         err "Source-built PHP 8.3 failed to start."
         journalctl -u "$PHP_FPM_SERVICE" --no-pager -n 30 2>/dev/null || true
+        if [ -n "$PHP_BACKUP" ]; then
+            systemctl stop php8.3-fpm 2>/dev/null || true
+            tar -xzpf "$PHP_BACKUP" -C / || err "PHP backup restore failed: ${PHP_BACKUP}"
+            systemctl daemon-reload
+            systemctl start php8.3-fpm || err "PHP-FPM could not be restarted after rollback."
+        fi
         return 1
     fi
 
     ok "PHP ${PHP_SOURCE_VERSION} source build installed."
+    [ -z "$PHP_BACKUP" ] || info "Previous PHP runtime backup: ${PHP_BACKUP}"
     rm -rf "$BUILD_DIR" "$RELEASE_JSON"
     _save_php_runtime
     return 0
@@ -438,11 +485,13 @@ _prepare_php_runtime() {
 
     _load_php_runtime
 
-    # Reuse a previously configured supported runtime when it still exists.
+    # Keep an installed Panel on its configured PHP branch. A clean install
+    # prefers PHP 8.3, the newest branch currently supported by the Panel.
     if [ -n "$PHP_VER" ] && _php_version_ok "$PHP_VER" && \
        [ -x "$PHP_BIN" ] && [ -n "$PHP_FPM_SERVICE" ]; then
-        if systemctl list-unit-files "$PHP_FPM_SERVICE.service" &>/dev/null 2>&1 || \
-           [ "$PHP_SOURCE_BUILD" = "true" ]; then
+        if { [ -d /var/www/pterodactyl ] || [ "$PHP_VER" = "8.3" ]; } &&
+           { systemctl list-unit-files "$PHP_FPM_SERVICE.service" &>/dev/null 2>&1 || \
+             [ "$PHP_SOURCE_BUILD" = "true" ]; }; then
             ok "Using configured PHP ${PHP_VER}: ${PHP_BIN}"
             return 0
         fi
@@ -461,10 +510,15 @@ _prepare_php_runtime() {
             ;;
     esac
 
-    # Prefer PHP 8.3, then PHP 8.2. Never select 8.4/8.5 merely because
-    # the distribution ships it; current Pterodactyl requires 8.2/8.3.
-    local V
-    for V in 8.3 8.2; do
+    # Prefer the newest minor accepted by the current Panel. PHP 8.5.12 is
+    # newer upstream, but Panel's Composer constraint currently excludes it.
+    local V PHP_CANDIDATES
+    if [ -d /var/www/pterodactyl ] && _php_version_ok "$PHP_VER"; then
+        PHP_CANDIDATES="$PHP_VER"
+    else
+        PHP_CANDIDATES="8.3 8.2"
+    fi
+    for V in $PHP_CANDIDATES; do
         if _php_pkg_available "$V"; then
             _php_set_package_runtime "$V"
             ok "PHP ${V} packages available in native APT repositories."
@@ -475,7 +529,7 @@ _prepare_php_runtime() {
 
     # Add the correct third-party repository for the distro.
     if _php_prepare_repositories "$DISTRO" "$CODENAME"; then
-        for V in 8.3 8.2; do
+        for V in $PHP_CANDIDATES; do
             if _php_pkg_available "$V"; then
                 _php_set_package_runtime "$V"
                 ok "PHP ${V} packages available after repository setup."
@@ -487,12 +541,15 @@ _prepare_php_runtime() {
 
     # Ubuntu 26.04 currently has native PHP 8.5, while current Pterodactyl
     # does not accept PHP 8.5. Build PHP 8.3 instead of mixing Ubuntu releases.
-    if [[ "$DISTRO" == "ubuntu" && "$CODENAME" == "resolute" ]]; then
+    if [[ ! -d /var/www/pterodactyl && "$DISTRO" == "ubuntu" && "$CODENAME" == "resolute" ]]; then
         _install_php83_from_source
         return $?
     fi
 
-    err "No supported PHP 8.2/8.3 package is available for ${DISTRO} ${CODENAME}."
+    err "No supported PHP package is available for ${DISTRO} ${CODENAME}."
+    if [ -d /var/www/pterodactyl ]; then
+        err "Could not preserve the Panel's configured PHP ${PHP_VER} branch; refusing an automatic runtime migration."
+    fi
     err "The installer will not silently use an unsupported PHP release."
     return 1
 }
@@ -500,6 +557,24 @@ _prepare_php_runtime() {
 _add_php_repo() {
     # Compatibility wrapper retained for existing callers.
     _prepare_php_runtime
+}
+
+_refresh_php_runtime() {
+    _load_php_runtime
+    [ -n "$PHP_VER" ] || {
+        err "PHP runtime is not selected."
+        return 1
+    }
+
+    if [ "$PHP_SOURCE_BUILD" = "true" ]; then
+        _install_php83_from_source refresh || return 1
+    else
+        DEBIAN_FRONTEND=noninteractive apt-get update ||
+            { err "APT update failed; cannot refresh PHP ${PHP_VER}."; return 1; }
+        DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y "php${PHP_VER}*" ||
+            { err "Could not upgrade the PHP ${PHP_VER} packages."; return 1; }
+    fi
+    verify_php_security_level
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -547,6 +622,7 @@ main_menu() {
     echo -e "  ${YELLOW}[7]${RESET}   🔄  Update Panel"
     echo -e "  ${YELLOW}[8]${RESET}   🔄  Update Wings"
     echo -e "  ${YELLOW}[9]${RESET}   🔄  Update Both (Panel + Wings)"
+    echo -e "  ${YELLOW}[22]${RESET}  🔒  Safe Update All (APT + Panel + Wings)"
     hsep
     echo -e "  ${BOLD}${CYAN}── FIX / MANAGE ────────────────────────────────────────${RESET}"
     echo -e "  ${CYAN}[10]${RESET}  🛠️   Fix / Repair Panel"
@@ -575,6 +651,7 @@ main_menu() {
         7)  update_panel ;;
         8)  update_wings ;;
         9)  update_panel; update_wings ;;
+        22) update_all_safe ;;
         10) fix_panel ;;
         11) fix_wings ;;
         12) blueprints_menu ;;
@@ -631,7 +708,6 @@ _do_install_panel() {
         err "Failed to add PHP repo. Cannot continue."
         return 1
     }
-
     # 3 ── Kill any stale MariaDB/MySQL that would block install
     step "Pre-install Cleanup"
     systemctl stop mariadb mysql 2>/dev/null || true
@@ -704,6 +780,7 @@ _do_install_panel() {
         err "The selected PHP runtime could not be started."
         return 1
     fi
+    _refresh_php_runtime || return 1
     ok "PHP ${PHP_VER} installed: $(php_cmd --version 2>/dev/null | head -1)"
     ok "MariaDB + Redis installed"
 
@@ -782,7 +859,8 @@ SQLEOF
     step "Composer Dependencies"
     cp .env.example .env
     info "Running composer install (may take ~60s)..."
-    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader 2>/dev/null
+    COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" "$(command -v composer)" \
+        install --no-dev --optimize-autoloader 2>/dev/null
     ok "Composer install complete"
 
     # 11 ── App key
@@ -1189,25 +1267,103 @@ install_panel_menu() {
 #   SHARED WINGS INSTALL
 # ═══════════════════════════════════════════════════════════════
 _do_install_wings() {
+    local WINGS_DOMAIN WINGS_EMAIL CERTBOT_RC NGINX_WAS_ACTIVE=false
+
+    ask "Node FQDN for automatic Wings SSL (blank to skip):"; read -r WINGS_DOMAIN
+    if [ -n "$WINGS_DOMAIN" ]; then
+        if [[ ! "$WINGS_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] ||
+            [[ "$WINGS_DOMAIN" != *.* ]] || [[ "$WINGS_DOMAIN" == *..* ]]; then
+            err "Enter a valid node hostname such as node1.example.com."
+            return 1
+        fi
+        WINGS_DOMAIN=$(printf '%s' "$WINGS_DOMAIN" | tr '[:upper:]' '[:lower:]')
+        ask "Email for Let's Encrypt certificate notices:"; read -r WINGS_EMAIL
+        if [[ -z "$WINGS_EMAIL" || "$WINGS_EMAIL" != *@* ]]; then
+            err "A valid email address is required for certificate issuance."
+            return 1
+        fi
+
+        step "Wings TLS Certificate"
+        info "The node hostname must resolve to this server and inbound port 80 must be reachable."
+        if ! command -v certbot >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get update ||
+                { err "APT update failed; cannot install Certbot."; return 1; }
+            DEBIAN_FRONTEND=noninteractive apt-get install -y certbot ||
+                { err "Certbot installation failed."; return 1; }
+        fi
+
+        if systemctl is-active --quiet nginx; then
+            systemctl stop nginx ||
+                { err "Could not stop Nginx temporarily for the standalone challenge."; return 1; }
+            NGINX_WAS_ACTIVE=true
+        fi
+
+        CERTBOT_RC=0
+        if [ "$NGINX_WAS_ACTIVE" = true ]; then
+            certbot certonly --standalone -d "$WINGS_DOMAIN" --email "$WINGS_EMAIL" \
+                --agree-tos --no-eff-email --non-interactive \
+                --pre-hook "systemctl stop nginx" --post-hook "systemctl start nginx" ||
+                CERTBOT_RC=$?
+        else
+            certbot certonly --standalone -d "$WINGS_DOMAIN" --email "$WINGS_EMAIL" \
+                --agree-tos --no-eff-email --non-interactive ||
+                CERTBOT_RC=$?
+        fi
+
+        if [ "$NGINX_WAS_ACTIVE" = true ] && ! systemctl start nginx; then
+            err "Certificate request finished, but Nginx could not be restarted."
+            return 1
+        fi
+        if [ "$CERTBOT_RC" -ne 0 ] ||
+            [ ! -s "/etc/letsencrypt/live/${WINGS_DOMAIN}/fullchain.pem" ] ||
+            [ ! -s "/etc/letsencrypt/live/${WINGS_DOMAIN}/privkey.pem" ]; then
+            err "Could not obtain a usable TLS certificate for ${WINGS_DOMAIN}."
+            err "Check DNS, inbound port 80, and Certbot output, then retry Wings installation."
+            return 1
+        fi
+        ok "Wings TLS certificate ready for ${WINGS_DOMAIN}."
+    else
+        warn "Skipping automatic SSL; enable TLS only if certificates already exist for the node FQDN."
+    fi
+
     step "Docker"
     if ! command -v docker &>/dev/null; then
         info "Installing Docker..."
-        curl -fsSL https://get.docker.com | bash &>/dev/null
+        local DOCKER_INSTALLER="/tmp/get-docker-$$.sh"
+        if ! curl -fsSL --retry 3 --retry-all-errors -o "$DOCKER_INSTALLER" https://get.docker.com ||
+            ! bash "$DOCKER_INSTALLER"; then
+            rm -f "$DOCKER_INSTALLER"
+            err "Docker installation failed."
+            return 1
+        fi
+        rm -f "$DOCKER_INSTALLER"
         ok "Docker installed"
     else
         ok "Docker already present"
     fi
-    systemctl enable --now docker &>/dev/null
+    systemctl enable --now docker || { err "Docker service could not be started."; return 1; }
 
     step "Wings Binary"
-    local ARCH
+    local ARCH WINGS_TMP
     ARCH=$(dpkg --print-architecture 2>/dev/null \
         || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
     mkdir -p /etc/pterodactyl
+    WINGS_TMP="/usr/local/bin/wings.download.$$"
     info "Downloading Wings (${ARCH})..."
-    curl -fsSL -o /usr/local/bin/wings \
+    if ! curl -fsSL --retry 3 --retry-all-errors -o "$WINGS_TMP" \
         "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${ARCH}"
-    chmod u+x /usr/local/bin/wings
+    then
+        rm -f "$WINGS_TMP"
+        err "Wings download failed."
+        return 1
+    fi
+    chmod 755 "$WINGS_TMP"
+    if ! "$WINGS_TMP" --version >/dev/null 2>&1 ||
+        ! mv -f "$WINGS_TMP" /usr/local/bin/wings; then
+        rm -f "$WINGS_TMP"
+        err "Downloaded Wings binary failed validation."
+        return 1
+    fi
     ok "Wings: $(/usr/local/bin/wings --version 2>/dev/null || echo 'installed')"
 
     step "Wings Systemd Service"
@@ -1233,9 +1389,45 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 WINGSEOF
+
+    cat > /etc/systemd/system/wings-configured.service << 'WINGSCONFIGEOF'
+[Unit]
+Description=Restart Wings after its auto-deploy configuration changes
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart wings
+ExecStartPost=/bin/systemctl --no-pager --full status wings
+WINGSCONFIGEOF
+
+    cat > /etc/systemd/system/wings-configured.path << 'WINGSPATHEOF'
+[Unit]
+Description=Watch for Wings auto-deploy configuration
+
+[Path]
+PathExists=/etc/pterodactyl/config.yml
+PathChanged=/etc/pterodactyl/config.yml
+Unit=wings-configured.service
+
+[Install]
+WantedBy=multi-user.target
+WINGSPATHEOF
+
     systemctl daemon-reload
-    systemctl enable wings &>/dev/null
-    ok "Wings service registered (start after 'wings configure ...')"
+    systemctl enable wings-configured.path || {
+        err "Could not enable the Wings configuration watcher."
+        return 1
+    }
+    systemctl start wings-configured.path || {
+        err "Could not start the Wings configuration watcher."
+        return 1
+    }
+    systemctl enable wings &>/dev/null || {
+        err "Could not enable the Wings service."
+        return 1
+    }
+    ok "Wings service is ready; it will restart automatically when auto-deploy writes config.yml."
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1245,7 +1437,7 @@ install_wings() {
     show_banner
     echo -e "${BOLD}${GREEN}  🔧 INSTALL PTERODACTYL WINGS${RESET}"
     sep; require_root; detect_os
-    _do_install_wings
+    _do_install_wings || { pause; return 1; }
     local WINGS_IP; WINGS_IP=$(hostname -I | awk '{print $1}')
     sep; ok "Wings installation complete!"
     echo ""
@@ -1261,7 +1453,8 @@ install_wings() {
     echo -e "${BOLD}${WHITE}  ║     wings configure \\                               ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║       --panel-url=https://your.panel \\              ║${RESET}"
     echo -e "${BOLD}${WHITE}  ║       --token=<TOKEN> --node=<ID>                   ║${RESET}"
-    echo -e "${BOLD}${WHITE}  ║  4. systemctl start wings                            ║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║  4. Wings restarts automatically after config is saved║${RESET}"
+    echo -e "${BOLD}${WHITE}  ║     Check with: systemctl status wings --no-pager     ║${RESET}"
     echo -e "${BOLD}${CYAN}  ║  ★  moradosolution — https://moradosolution.com                ║${RESET}"
     echo -e "${BOLD}${CYAN}  ╚══════════════════════════════════════════════════════╝${RESET}"
     pause
@@ -1307,7 +1500,11 @@ install_combined() {
     fi
 
     echo ""; info "════ PHASE 2 / 2 — Installing Wings ════"
-    _do_install_wings
+    _do_install_wings || {
+        err "Wings installation failed."
+        pause
+        return 1
+    }
 
     sep; ok "Combined install complete!"
     _print_panel_summary "$P_DOMAIN" "$P_ADMIN_USER" "$COMBO_MODE"
@@ -1381,9 +1578,14 @@ uninstall_wings() {
     show_banner; echo -e "${BOLD}${RED}  🗑️  UNINSTALL WINGS${RESET}"; sep; require_root
     warn "Permanently removes Wings binary, config, service."
     ask "Type CONFIRM:"; read -r C; [[ "$C" != "CONFIRM" ]] && { info "Aborted."; pause; return; }
+    systemctl stop wings-configured.path wings-configured.service 2>/dev/null
+    systemctl disable wings-configured.path 2>/dev/null
     systemctl stop wings 2>/dev/null; systemctl disable wings 2>/dev/null
     rm -f /usr/local/bin/wings; rm -rf /etc/pterodactyl
-    rm -f /etc/systemd/system/wings.service; systemctl daemon-reload
+    rm -f /etc/systemd/system/wings.service \
+        /etc/systemd/system/wings-configured.path \
+        /etc/systemd/system/wings-configured.service
+    systemctl daemon-reload
     ok "Wings removed"
     ask "Also remove Docker? [y/n]:"; read -r RD
     [[ "$RD" =~ ^[Yy]$ ]] && {
@@ -1467,9 +1669,16 @@ uninstall_everything() {
     # ═══════════════════════════════════════════════════════════
     step "[ 3/12 ] Removing Pterodactyl Wings"
     # ═══════════════════════════════════════════════════════════
+    systemctl stop wings-configured.path wings-configured.service 2>/dev/null || true
+    systemctl disable wings-configured.path 2>/dev/null || true
+    systemctl stop wings 2>/dev/null || true
+    systemctl disable wings 2>/dev/null || true
     rm -f /usr/local/bin/wings
     rm -rf /etc/pterodactyl
-    rm -f /etc/systemd/system/wings.service
+    rm -f /etc/systemd/system/wings.service \
+        /etc/systemd/system/wings-configured.path \
+        /etc/systemd/system/wings-configured.service
+    systemctl daemon-reload
     ok "Wings removed"
 
     # ═══════════════════════════════════════════════════════════
@@ -1684,36 +1893,203 @@ uninstall_everything() {
 # ═══════════════════════════════════════════════════════════════
 #  [7]  UPDATE PANEL
 # ═══════════════════════════════════════════════════════════════
+verify_php_security_level() {
+    local installed_version minimum_version
+    _load_php_runtime
+    installed_version=$("$PHP_BIN" -r 'echo PHP_VERSION;' 2>/dev/null) || {
+        err "Could not read the configured PHP runtime version."
+        return 1
+    }
+    case "$PHP_VER" in
+        8.2) minimum_version="8.2.35" ;;
+        8.3) minimum_version="8.3.36" ;;
+        *)
+            err "PHP ${PHP_VER} is not covered by the current Panel security-release guidance."
+            return 1
+            ;;
+    esac
+    if ! dpkg --compare-versions "$installed_version" ge "$minimum_version"; then
+        err "PHP ${installed_version} is below the security fix level ${minimum_version}."
+        err "Update PHP from a trusted source before installing or updating the Panel."
+        return 1
+    fi
+    ok "PHP ${installed_version} meets the current Panel security fix level."
+}
+
+_panel_env_value() {
+    local key="$1"
+    (
+        cd /var/www/pterodactyl || exit 1
+        "$PHP_BIN" -r '
+            require "vendor/autoload.php";
+            Dotenv\Dotenv::createImmutable(getcwd())->safeLoad();
+            $value = $_ENV[$argv[1]] ?? getenv($argv[1]);
+            if ($value !== false && $value !== null) echo $value;
+        ' "$key"
+    )
+}
+
+_backup_panel_before_update() {
+    local stamp db_host db_port db_name db_user db_password
+    umask 077
+    stamp=$(date +%Y%m%d%H%M%S)
+    PANEL_BACKUP_DIR="/var/backups/pterodactyl/${stamp}"
+    mkdir -p "$PANEL_BACKUP_DIR" || return 1
+    chmod 700 /var/backups/pterodactyl "$PANEL_BACKUP_DIR" || return 1
+    tar -czpf "$PANEL_BACKUP_DIR/panel-files.tar.gz" -C /var/www pterodactyl || {
+        err "Panel file backup failed."
+        return 1
+    }
+    db_host=$(_panel_env_value DB_HOST)
+    db_port=$(_panel_env_value DB_PORT)
+    db_name=$(_panel_env_value DB_DATABASE)
+    db_user=$(_panel_env_value DB_USERNAME)
+    db_password=$(_panel_env_value DB_PASSWORD)
+    db_host=${db_host:-127.0.0.1}
+    db_port=${db_port:-3306}
+    if [[ -z "$db_name" || -z "$db_user" || -z "$db_password" ]]; then
+        err "Could not read Panel database settings; refusing update without a database backup."
+        return 1
+    fi
+    if ! MYSQL_PWD="$db_password" mysqldump --single-transaction --quick \
+        --host="$db_host" --port="$db_port" --user="$db_user" "$db_name" \
+        > "$PANEL_BACKUP_DIR/panel-database.sql"; then
+        err "Panel database backup failed."
+        return 1
+    fi
+    chmod 600 "$PANEL_BACKUP_DIR"/*
+    ok "Panel backup created at ${PANEL_BACKUP_DIR}"
+}
+
+_resume_panel_after_failed_update() {
+    php_cmd /var/www/pterodactyl/artisan up >/dev/null 2>&1 || true
+    systemctl start pteroq 2>/dev/null || true
+}
+
+_update_panel_core() {
+    local root="/var/www/pterodactyl"
+    local stamp archive stage previous constraint
+    [ -d "$root" ] || { err "Panel not found at ${root}."; return 1; }
+    [ -f "$root/.env" ] || { err "Panel .env is missing; refusing update."; return 1; }
+    _prepare_php_runtime || return 1
+    _refresh_php_runtime || return 1
+    command -v composer >/dev/null 2>&1 || { err "Composer is not installed."; return 1; }
+    command -v mysqldump >/dev/null 2>&1 || { err "mysqldump is missing; refusing update without a database backup."; return 1; }
+    if [ "${1:-}" != "backup-ready" ]; then
+        _backup_panel_before_update || return 1
+    fi
+    stamp=$(date +%Y%m%d%H%M%S)
+    archive="/var/www/pterodactyl-panel-${stamp}.tar.gz"
+    stage="/var/www/pterodactyl-stage-${stamp}"
+    previous="/var/www/pterodactyl-previous-${stamp}"
+    php_cmd "$root/artisan" down || return 1
+    systemctl stop pteroq 2>/dev/null || true
+    if ! curl -fsSL --retry 3 --retry-all-errors -o "$archive" \
+        https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz ||
+        ! tar -tzf "$archive" >/dev/null; then
+        rm -f "$archive"
+        err "Panel release download or archive validation failed."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    if ! mkdir -p "$stage" || ! tar -xzf "$archive" -C "$stage" ||
+        [ ! -f "$stage/artisan" ] || [ ! -f "$stage/composer.json" ]; then
+        rm -rf "$stage"; rm -f "$archive"
+        err "Panel release archive has an unexpected layout."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    if ! cp "$root/.env" "$stage/.env"; then
+        rm -rf "$stage"; rm -f "$archive"
+        err "Could not preserve the Panel environment file."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    rm -rf "$stage/storage"
+    if ! cp -a "$root/storage" "$stage/storage"; then
+        rm -rf "$stage"; rm -f "$archive"
+        err "Could not preserve Panel storage."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    constraint=$(sed -n 's/^[[:space:]]*"php"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$stage/composer.json" | head -1)
+    if ! _panel_php_constraint_check "$constraint"; then
+        rm -rf "$stage"; rm -f "$archive"
+        err "The downloaded Panel release is incompatible with the selected PHP runtime."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    if ! COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" "$(command -v composer)" \
+        --working-dir="$stage" install --no-dev --optimize-autoloader; then
+        rm -rf "$stage"; rm -f "$archive"
+        err "Composer failed; existing Panel files were not replaced."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    if ! mv "$root" "$previous" || ! mv "$stage" "$root"; then
+        [ -d "$previous" ] && [ ! -d "$root" ] && mv "$previous" "$root"
+        err "Could not switch Panel files; the previous copy is retained."
+        _resume_panel_after_failed_update
+        return 1
+    fi
+    rm -f "$archive"
+    if ! php_cmd "$root/artisan" migrate --force; then
+        err "Migration failed. Panel remains in maintenance mode."
+        err "File/database backup: ${PANEL_BACKUP_DIR}"
+        err "Previous application files: ${previous}"
+        return 1
+    fi
+    php_cmd "$root/artisan" view:clear || return 1
+    php_cmd "$root/artisan" config:clear || return 1
+    php_cmd "$root/artisan" route:clear || return 1
+    chown -R www-data:www-data "$root"
+    php_cmd "$root/artisan" up || return 1
+    systemctl restart pteroq || return 1
+    systemctl reload nginx || return 1
+    rm -rf "$previous"
+    ok "Panel updated; backup retained at ${PANEL_BACKUP_DIR}"
+}
+
+_update_wings_core() {
+    local binary current arch temp backup version
+    binary=$(command -v wings 2>/dev/null) || { warn "Wings is not installed; skipping."; return 0; }
+    current=$("$binary" --version 2>/dev/null || echo "unknown")
+    arch=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    case "$arch" in amd64|arm64) ;; *) err "Unsupported Wings architecture: ${arch}"; return 1 ;; esac
+    mkdir -p /var/backups/pterodactyl || return 1
+    chmod 700 /var/backups/pterodactyl || return 1
+    backup="/var/backups/pterodactyl/wings-${current}-$(date +%Y%m%d%H%M%S)"
+    temp="${binary}.download.$$"
+    if ! curl -fsSL --retry 3 --retry-all-errors -o "$temp" \
+        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${arch}" ||
+        [ ! -s "$temp" ]; then
+        rm -f "$temp"
+        err "Wings download failed."
+        return 1
+    fi
+    chmod 755 "$temp"
+    version=$("$temp" --version 2>/dev/null) || {
+        rm -f "$temp"
+        err "Downloaded Wings binary failed validation."
+        return 1
+    }
+    cp -p "$binary" "$backup" || { rm -f "$temp"; err "Could not back up Wings."; return 1; }
+    systemctl stop wings || { rm -f "$temp"; return 1; }
+    if ! mv -f "$temp" "$binary" || ! systemctl start wings ||
+        ! systemctl is-active --quiet wings; then
+        systemctl stop wings 2>/dev/null || true
+        cp -p "$backup" "$binary"
+        systemctl start wings 2>/dev/null || true
+        err "Wings failed to start after update; restored ${backup}."
+        return 1
+    fi
+    ok "Wings updated: ${current} -> ${version}; backup: ${backup}"
+}
+
 update_panel() {
     show_banner; echo -e "${BOLD}${YELLOW}  🔄 UPDATE PANEL${RESET}"; sep; require_root
-    [ ! -d /var/www/pterodactyl ] && { err "Panel not found"; pause; return; }
-    _prepare_php_runtime || { err "No supported PHP runtime available."; pause; return; }
-    cp /var/www/pterodactyl/.env \
-        "/var/www/pterodactyl/.env.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null
-    ok ".env backed up"
-    cd /var/www/pterodactyl || exit
-    php_cmd artisan down &>/dev/null
-    info "Downloading latest Panel..."; curl -fsSL -o panel.tar.gz \
-        https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-    tar -xzf panel.tar.gz &>/dev/null; rm -f panel.tar.gz
-    if [ -f composer.json ]; then
-        local PANEL_PHP_CONSTRAINT
-        PANEL_PHP_CONSTRAINT=$(sed -n 's/^[[:space:]]*"php"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' composer.json | head -1)
-        _panel_php_constraint_check "$PANEL_PHP_CONSTRAINT" || {
-            php_cmd artisan up &>/dev/null || true
-            err "Update stopped before Composer because the Panel PHP requirement is incompatible."
-            pause
-            return
-        }
-    fi
-    ok "Files updated"
-    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader &>/dev/null & spinner "Composer install"
-    php_cmd artisan migrate --force &>/dev/null && ok "Migrations done"
-    php_cmd artisan view:clear &>/dev/null; php_cmd artisan config:clear &>/dev/null; php_cmd artisan route:clear &>/dev/null
-    ok "Caches cleared"
-    chown -R www-data:www-data /var/www/pterodactyl
-    php_cmd artisan up &>/dev/null; systemctl restart pteroq
-    sep; ok "Panel updated!"; echo -e "${CYAN}  ★ MoradoSolution — https://moradosolution.com${RESET}"; pause
+    _update_panel_core || { pause; return 1; }
+    echo -e "${CYAN}  ★ MoradoSolution — https://moradosolution.com${RESET}"; pause
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1721,17 +2097,41 @@ update_panel() {
 # ═══════════════════════════════════════════════════════════════
 update_wings() {
     show_banner; echo -e "${BOLD}${YELLOW}  🔄 UPDATE WINGS${RESET}"; sep; require_root
-    ! command -v wings &>/dev/null && { err "Wings not found"; pause; return; }
-    local OV; OV=$(wings --version 2>/dev/null || echo "unknown")
-    info "Current: ${OV}"; systemctl stop wings 2>/dev/null
-    local ARCH; ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    info "Downloading Wings (${ARCH})..."
-    curl -fsSL -o /usr/local/bin/wings \
-        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${ARCH}"
-    chmod u+x /usr/local/bin/wings
-    systemctl start wings 2>/dev/null
-    ok "Wings updated: ${OV} → $(/usr/local/bin/wings --version 2>/dev/null || echo 'latest')"
+    _update_wings_core || { pause; return 1; }
     sep; echo -e "${CYAN}  ★ moradosolution — https://moradosolution.com${RESET}"; pause
+}
+
+update_all_safe() {
+    show_banner; echo -e "${BOLD}${YELLOW}  🔒 SAFE UPDATE ALL${RESET}"; sep; require_root
+    echo "This updates installed APT packages (including APT-managed PHP), then the Panel and Wings."
+    echo "Panel files/database and the Wings binary are backed up; services may restart."
+    read -r -p "Continue? [y/N] " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { warn "Update cancelled."; pause; return; }
+    if [ -d /var/www/pterodactyl ]; then
+        _prepare_php_runtime || { pause; return 1; }
+        command -v mysqldump >/dev/null 2>&1 || {
+            err "mysqldump is missing; refusing update without a database backup."
+            pause
+            return 1
+        }
+        _backup_panel_before_update || { pause; return 1; }
+    fi
+    step "Updating system packages"
+    if ! DEBIAN_FRONTEND=noninteractive apt-get update ||
+        ! DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; then
+        err "System package update failed; Panel/Wings updates were not started."
+        pause
+        return 1
+    fi
+    if [ -d /var/www/pterodactyl ]; then
+        _update_panel_core backup-ready || { pause; return 1; }
+    else
+        warn "Panel is not installed; skipping Panel update."
+    fi
+    _update_wings_core || { pause; return 1; }
+    [ ! -f /var/run/reboot-required ] || warn "A system reboot is required to finish some package updates."
+    ok "Safe update completed."
+    pause
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1988,8 +2388,11 @@ fix_panel() {
     _fp_composer() {
         step "Composer Autoload"
         cd /var/www/pterodactyl || { err "Panel directory not found"; return; }
+        _load_php_runtime
+        local COMPOSER_BIN
+        COMPOSER_BIN=$(command -v composer) || { err "Composer is not installed."; return 1; }
         COMPOSER_ALLOW_SUPERUSER=1 \
-            composer install --no-dev --optimize-autoloader &>/dev/null \
+            "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --optimize-autoloader &>/dev/null \
             && ok "Composer autoload rebuilt"
     }
 
@@ -3006,6 +3409,7 @@ emergency_502_fix() {
         err "Could not prepare a Pterodactyl-compatible PHP runtime."
         return 1
     }
+    _refresh_php_runtime || return 1
 
     systemctl enable "${PHP_FPM_SERVICE}" &>/dev/null
     systemctl restart "${PHP_FPM_SERVICE}" &>/dev/null

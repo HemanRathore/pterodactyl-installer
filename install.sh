@@ -75,7 +75,7 @@ if ! DEBIAN_FRONTEND=noninteractive apt-get update -y &>/dev/null; then
     exit 1
 fi
 
-if ! DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget bash &>/dev/null; then
+if ! DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget bash ca-certificates &>/dev/null; then
     echo -e "${RED}  [✘] Failed to install downloader dependencies.${RESET}"
     exit 1
 fi

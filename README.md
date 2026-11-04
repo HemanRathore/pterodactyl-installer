@@ -44,7 +44,7 @@ The launcher downloads the latest MoradoSolution installer and starts the manage
 | Option | Description |
 |--------|-------------|
 | `[1]` Install Panel | Nginx + Let's Encrypt SSL, Cloudflare Tunnel, or HTTP only |
-| `[2]` Install Wings | Docker + Wings daemon + automatic systemd service |
+| `[2]` Install Wings | Docker + latest Wings + optional automatic Let's Encrypt TLS |
 | `[3]` Install Combined | Panel + Wings on the same server |
 
 ## 🗑️ Uninstallation
@@ -62,6 +62,12 @@ The launcher downloads the latest MoradoSolution installer and starts the manage
 | `[7]` Update Panel | Downloads the latest Panel release and runs migrations |
 | `[8]` Update Wings | Downloads the latest Wings binary |
 | `[9]` Update Both | Updates Panel and Wings |
+| `[22]` Safe Update All | Confirms, backs up Panel files/database, then updates APT packages, Panel, and Wings |
+
+Option `[22]` uses `apt-get upgrade` without intentionally removing packages.
+It stages and validates Panel files and Composer dependencies before switching,
+keeps a root-only Panel/database backup, and retains a Wings binary backup for
+rollback if the updated service does not start. Service restarts may occur.
 
 ## 🛠️ Fix & Management
 
@@ -172,6 +178,17 @@ The installer manages:
 - PHP configuration
 
 The installer also checks the Panel's Composer PHP requirements before Panel updates.
+Panel installation and updates also require PHP 8.2.35+ or 8.3.36+, the minimum
+versions named in the current upstream Panel security release. APT-managed PHP
+is upgraded to the newest package available for the selected supported branch
+during Panel updates and option `[22]`; source-built PHP is rebuilt from the
+latest 8.3 release during Panel updates.
+
+PHP 8.5.12 is the newest PHP release overall, but the current Panel's upstream
+Composer requirement is `^8.2 || ^8.3`, which excludes PHP 8.5. The installer
+therefore selects the newest compatible branch (PHP 8.3) for fresh installs and
+fresh reinstalls, and preserves an existing Panel's configured branch while
+upgrading it to the latest available security-patched release.
 
 ### Ubuntu 26.04
 
@@ -269,6 +286,23 @@ Select:
 ### Cloudflare Tunnel
 
 Cloudflare Tunnel can be used when direct public exposure of ports `80/443` is not desired.
+
+### Wings node TLS
+
+During Wings installation, enter the node's public FQDN and an email to request a
+Let's Encrypt certificate automatically, or leave the hostname blank to skip it.
+The hostname must resolve to the node and inbound TCP port 80 must be reachable;
+Nginx is stopped briefly if it is active so Certbot's standalone HTTP challenge
+can bind that port. Use the same FQDN in the Panel's node settings. After running
+the Panel's `wings configure` auto-deploy command, the installer watches for
+`/etc/pterodactyl/config.yml`, restarts Wings automatically, and records the
+service status in the systemd journal. Check it with
+`systemctl status wings --no-pager`.
+
+Panel and Wings downloads use GitHub's latest stable release URLs; Docker's
+official install script is fetched at install time, PHP uses the selected
+supported branch (and the current stable 8.3 release for the source-build
+fallback), and OS packages come from the configured APT repositories.
 
 ---
 
