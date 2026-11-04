@@ -1370,6 +1370,18 @@ install_panel_menu() {
 # ═══════════════════════════════════════════════════════════════
 #   SHARED WINGS INSTALL
 # ═══════════════════════════════════════════════════════════════
+_wings_certificate_is_usable() {
+    local domain="$1"
+    local cert_path="/etc/letsencrypt/live/${domain}"
+    [ -s "${cert_path}/fullchain.pem" ] &&
+        [ -s "${cert_path}/privkey.pem" ] &&
+        command -v openssl >/dev/null 2>&1 &&
+        openssl x509 -in "${cert_path}/fullchain.pem" -noout \
+            -checkhost "$domain" >/dev/null 2>&1 &&
+        openssl x509 -in "${cert_path}/fullchain.pem" -noout \
+            -checkend 0 >/dev/null 2>&1
+}
+
 _do_install_wings() {
     local WINGS_DOMAIN WINGS_EMAIL CERTBOT_RC NGINX_WAS_ACTIVE=false
 
@@ -1396,33 +1408,39 @@ _do_install_wings() {
                 { err "Certbot installation failed."; return 1; }
         fi
 
-        if systemctl is-active --quiet nginx; then
-            systemctl stop nginx ||
-                { err "Could not stop Nginx temporarily for the standalone challenge."; return 1; }
-            NGINX_WAS_ACTIVE=true
-        fi
-
-        CERTBOT_RC=0
-        if [ "$NGINX_WAS_ACTIVE" = true ]; then
-            certbot certonly --standalone -d "$WINGS_DOMAIN" --email "$WINGS_EMAIL" \
-                --agree-tos --no-eff-email --non-interactive \
-                --pre-hook "systemctl stop nginx" --post-hook "systemctl start nginx" ||
-                CERTBOT_RC=$?
+        if _wings_certificate_is_usable "$WINGS_DOMAIN"; then
+            ok "Reusing the existing, valid TLS certificate for ${WINGS_DOMAIN}."
         else
-            certbot certonly --standalone -d "$WINGS_DOMAIN" --email "$WINGS_EMAIL" \
+            mkdir -p /var/log/letsencrypt || {
+                err "Could not create /var/log/letsencrypt for Certbot logs."
+                return 1
+            }
+
+            if systemctl is-active --quiet nginx; then
+                systemctl stop nginx ||
+                    { err "Could not stop Nginx temporarily for the standalone challenge."; return 1; }
+                NGINX_WAS_ACTIVE=true
+            fi
+
+            CERTBOT_RC=0
+            certbot certonly --standalone --logs-dir /var/log/letsencrypt \
+                -d "$WINGS_DOMAIN" --email "$WINGS_EMAIL" \
                 --agree-tos --no-eff-email --non-interactive ||
                 CERTBOT_RC=$?
-        fi
 
-        if [ "$NGINX_WAS_ACTIVE" = true ] && ! systemctl start nginx; then
-            err "Certificate request finished, but Nginx could not be restarted."
-            return 1
+            if [ "$NGINX_WAS_ACTIVE" = true ] && ! systemctl start nginx; then
+                err "Certificate request finished, but Nginx could not be restarted."
+                return 1
+            fi
+
+            if [ "$CERTBOT_RC" -ne 0 ]; then
+                err "Certbot failed with exit code ${CERTBOT_RC}; see /var/log/letsencrypt/letsencrypt.log."
+                return 1
+            fi
         fi
-        if [ "$CERTBOT_RC" -ne 0 ] ||
-            [ ! -s "/etc/letsencrypt/live/${WINGS_DOMAIN}/fullchain.pem" ] ||
-            [ ! -s "/etc/letsencrypt/live/${WINGS_DOMAIN}/privkey.pem" ]; then
+        if ! _wings_certificate_is_usable "$WINGS_DOMAIN"; then
             err "Could not obtain a usable TLS certificate for ${WINGS_DOMAIN}."
-            err "Check DNS, inbound port 80, and Certbot output, then retry Wings installation."
+            err "Certificate is missing, expired, or does not match the hostname. Check Certbot output and retry."
             return 1
         fi
         ok "Wings TLS certificate ready for ${WINGS_DOMAIN}."
