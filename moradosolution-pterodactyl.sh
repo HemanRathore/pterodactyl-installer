@@ -1481,7 +1481,7 @@ _do_install_wings() {
     fi
     chmod 755 "$WINGS_TMP"
     if ! WINGS_VERSION=$("$WINGS_TMP" version 2>&1) ||
-        ! printf '%s\n' "$WINGS_VERSION" | grep -qE '^wings v[0-9]+'; then
+        ! printf '%s\n' "$WINGS_VERSION" | grep -qE '^wings vv?[0-9]+'; then
         rm -f "$WINGS_TMP"
         err "Downloaded Wings binary failed validation using its version command."
         [ -z "$WINGS_VERSION" ] || info "Wings reported: ${WINGS_VERSION}"
@@ -2205,7 +2205,7 @@ _update_wings_core() {
         err "Downloaded Wings binary failed validation."
         return 1
     }
-    if ! printf '%s\n' "$version" | grep -qE '^wings v[0-9]+'; then
+    if ! printf '%s\n' "$version" | grep -qE '^wings vv?[0-9]+'; then
         rm -f "$temp"
         err "Downloaded Wings binary returned an unexpected version response."
         return 1
